@@ -1,51 +1,68 @@
 # Roadmap
 
-Phases are ordered by dependency. Each phase has an observable acceptance gate; defer later capabilities until the preceding gate is met. Nothing below is implemented by this documentation baseline.
+The roadmap is ordered by dependency. Each phase has a small acceptance gate and depends on the previous phase. Nothing below is implemented yet; this repository is currently a documentation and structure baseline.
 
-## 0. Repository setup
+## 1. Repository and documentation foundation
 
-- Establish the Python project structure, supported Python version, dependency and development workflow, configuration validation, logging, and pytest setup.
-- Add `.env` loading with safe defaults and fail-fast validation for required settings; keep placeholders only in `.env.example`.
-- Add health/readiness behavior only after its dependencies and semantics are defined.
-- **Acceptance:** clean setup instructions work in a fresh development environment; configuration errors are actionable; baseline tests and lint/type checks run; no secrets are tracked.
+- Keep the architecture, API contract, data flow, evaluation, contribution guidance, and scope aligned.
+- Confirm the intended license, supported runtimes, and repository conventions.
+- **Acceptance:** documentation is consistent, no secrets are exposed, and no features are described as implemented without code.
 
-## 1. PDF/TXT ingestion
+## 2. Backend skeleton and configuration
 
-- Validate file type, size, and malformed uploads.
-- Extract PDF text with page references and TXT text; normalize extraction output to a common internal representation.
-- Implement an ingestion path that reports useful errors and does not silently accept empty/failed extraction.
-- **Acceptance:** tests cover valid PDF/TXT, page/source metadata, empty or malformed files, unsupported types, and size limits.
+- Establish the Python/package/tooling conventions and minimal FastAPI application layout.
+- Add typed Pydantic settings and explicit configuration validation; document local setup and health semantics.
+- **Acceptance:** the backend starts locally with documented configuration, focused tests cover valid and invalid settings, and no external credentials are required for startup.
 
-## 2. Audio/video transcription
+## 3. PostgreSQL integration and document metadata
 
-- Evaluate local Whisper-compatible options against target hardware, quality, latency, licensing, and resource requirements; document selected model and operational constraints.
-- Evaluate FFmpeg installation/runtime behavior and extract video audio; transcribe audio and extracted tracks with timestamps where available.
-- **Acceptance:** tests cover supported audio/video inputs, timestamps, missing/invalid media, FFmpeg/model failures, and resource/configuration errors. No hardware or quality claims without measurements.
+- Select the local PostgreSQL development workflow and SQLAlchemy conventions.
+- Add relational document and processing metadata models and migrations when approved.
+- **Acceptance:** tests cover persistence, status/error transitions, and database unavailable behavior. Keep vectors and original files outside the relational responsibility boundary.
 
-## 3. Shared retrieval
+## 4. File upload and extraction
 
-- Establish the shared ingestion representation and chunking policy for extracted text, retaining document page and media time metadata.
-- Evaluate and select an embedding model; define dimension/version compatibility and Pinecone index configuration.
-- Implement vector storage and retrieval with configurable top-k, similarity threshold, and metadata filters. Do not add reranking in v1.
-- **Acceptance:** tests verify stored text/metadata, source filters, threshold/top-k behavior, embedding/index errors, and retrieval failure handling.
+- Add a file storage abstraction with a safe local filesystem implementation and upload validation.
+- Support PDF/TXT extraction with source identity and PDF page metadata.
+- **Acceptance:** tests cover supported and unsupported types, size limits, malformed/empty files, extraction, provenance, storage failure, and cleanup.
 
-## 4. Grounded Q&A, summaries, and study notes
+## 5. Audio/video transcription
 
-- Define a replaceable LLM service interface and choose an initial provider after cost, quality, privacy, and operational review.
-- Generate answers only from retrieved context, return citations, and abstain when evidence is insufficient.
-- Add summary and study-note generation over selected source material, with provenance retained where feasible.
-- **Acceptance:** tests cover grounded answers, abstention, citation mapping, provider failures, and output validation. Prompts and responses must not imply certainty beyond evidence.
+- Evaluate a local Whisper-compatible runtime against hardware, quality, latency, licensing, and resource constraints.
+- Add MP3/WAV transcription and MP4 audio extraction with FFmpeg, preserving timestamps where available.
+- **Acceptance:** tests cover valid media, timestamps, invalid media, missing FFmpeg/model conditions, and explicit failures. Document measured results only.
 
-## 5. Evaluation and hardening
+## 6. Chunking, embeddings, and Pinecone integration
 
-- Build a versioned, representative evaluation set and measurable retrieval, citation, answer-grounding, abstention, and failure metrics.
-- Measure actual outcomes before tuning chunking, thresholds, prompts, or model choices; keep results reproducible and label dataset/model versions.
-- Add operational limits and privacy/security review appropriate to the intended deployment.
-- **Acceptance:** evaluation procedure and results are repeatable; regressions can be detected against a documented baseline. See [EVALUATION.md](docs/EVALUATION.md).
+- Define chunking and shared source metadata; select an embedding approach after evaluation.
+- Integrate Pinecone for vectors and searchable metadata; define index/version/namespace, re-embedding, deletion, and consistency behavior.
+- **Acceptance:** tests cover chunk/provenance mapping, embedding compatibility, upsert/query failures, and no-result behavior. No reranking in v1.
 
-## 6. LectureIQ integration
+## 7. Retrieval and grounded answers with citations
 
-- Only after the service contract and access-control design are accepted, integrate through LectureIQ's Express backend.
-- Keep Cognify AI independently runnable; define service-to-service authentication, network boundary, timeout/retry policy, and error mapping before enabling calls.
-- Do not change LectureIQ during this standalone service's documentation phase.
-- **Acceptance:** integration contract and security review are approved, integration tests exercise success and failure paths, and Cognify AI remains independently testable and runnable.
+- Add configurable top-k, similarity thresholds, metadata filters, and a replaceable LLM boundary.
+- Return evidence-grounded answers, page/timestamp citations, and explicit abstention when evidence is insufficient.
+- **Acceptance:** tests cover retrieval relevance, citation locations, unanswerable queries, provider failures, and unsupported claims; never claim hallucinations are eliminated.
+
+## 8. Frontend dashboard and chat UI
+
+- Establish the React/TypeScript/Vite/Tailwind toolchain and connect to `/api/v1`.
+- Implement document upload/list/status and chat experience against the documented API.
+- **Acceptance:** UI checks cover primary flows and failure states; no secrets are embedded in the client bundle.
+
+## 9. Summaries, study notes, and transcript UI
+
+- Add short and detailed summaries, topic-wise notes, key concepts, transcript retrieval/display, and source references.
+- **Acceptance:** tests verify source scoping, citations/provenance where available, validation, and generation failure behavior.
+
+## 10. Automated testing, evaluation, and deployment preparation
+
+- Complete automated tests and an offline evaluation set for retrieval, citations, answer support, abstention, latency, and failure cases.
+- Review privacy, security, operational limits, cost, and deployment requirements. Do not add Docker/Kubernetes until a separate decision is made.
+- **Acceptance:** repeatable evaluation with documented dataset/model/config versions; no invented performance claims; deployment readiness review identifies access controls.
+
+## 11. Future integration with LectureIQ
+
+- Integrate only through LectureIQ's existing Express backend after contract and security review.
+- Keep Cognify AI independently runnable; define service authentication, network boundaries, timeout/retry behavior, and error mapping before enabling calls.
+- **Acceptance:** the integration contract is agreed, success/failure tests are in place, and the service remains independently testable and runnable.

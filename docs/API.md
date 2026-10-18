@@ -6,16 +6,16 @@
 
 | Method | Path | Purpose | Status |
 |---|---|---|---|
-| `GET` | `/api/v1/health` | Basic process health; readiness semantics to define |
-| `POST` | `/api/v1/documents` | Upload one PDF, TXT, MP3, WAV, or MP4 |
-| `GET` | `/api/v1/documents` | List documents (pagination/filter contract to define) |
-| `GET` | `/api/v1/documents/{document_id}` | Read document metadata and processing status |
-| `DELETE` | `/api/v1/documents/{document_id}` | Delete metadata, vectors, and original according to defined lifecycle |
-| `POST` | `/api/v1/chat/sessions/{session_id}/messages` | Ask a question; return answer/abstention and citations |
-| `POST` | `/api/v1/queries` | Optional stateless question route; whether needed remains open |
-| `POST` | `/api/v1/documents/{document_id}/summaries` | Request short or detailed source-grounded summary |
-| `POST` | `/api/v1/documents/{document_id}/study-notes` | Request topic-wise notes and key concepts |
-| `GET` | `/api/v1/documents/{document_id}/transcript` | Read transcript after successful processing |
+| `GET` | `/api/v1/health` | Basic process health; readiness semantics to define | Proposed |
+| `POST` | `/api/v1/documents` | Upload one PDF, TXT, MP3, WAV, or MP4 | Proposed |
+| `GET` | `/api/v1/documents` | List documents (pagination/filter contract to define) | Proposed |
+| `GET` | `/api/v1/documents/{document_id}` | Read document metadata and processing status | Proposed |
+| `DELETE` | `/api/v1/documents/{document_id}` | Delete metadata, vectors, and original according to defined lifecycle | Proposed |
+| `POST` | `/api/v1/chat/sessions/{session_id}/messages` | Ask a question; return answer/abstention and citations | Proposed |
+| `POST` | `/api/v1/queries` | Optional stateless question route; whether needed remains open | Proposed |
+| `POST` | `/api/v1/documents/{document_id}/summaries` | Request short or detailed source-grounded summary | Proposed |
+| `POST` | `/api/v1/documents/{document_id}/study-notes` | Request topic-wise notes and key concepts | Proposed |
+| `GET` | `/api/v1/documents/{document_id}/transcript` | Read transcript after successful processing | Proposed |
 
 No asynchronous job model, persistence model, or status lifecycle has been selected. The ingestion endpoint may need to return a job identifier if processing is asynchronous; settle this before implementation.
 

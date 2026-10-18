@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping build Cognify AI. The current repository is a documentation baseline; implementation should follow the phases in [ROADMAP.md](ROADMAP.md).
+Thanks for helping build Cognify AI. The current repository is a documentation and folder-structure baseline; implementation should follow the phases in [ROADMAP.md](ROADMAP.md).
 
 ## Before changing files
 
@@ -11,7 +11,7 @@ Thanks for helping build Cognify AI. The current repository is a documentation b
 
 ## Proposed development expectations
 
-The project intends to use Python, FastAPI, Pydantic, and pytest, but supported Python version, package manager, and exact lint/type-check tools have not yet been selected. Once established, use the repository's documented setup and targeted checks rather than introducing another tool without need.
+The selected stack is React, TypeScript, Vite, and Tailwind CSS for the frontend; Python, FastAPI, Pydantic Settings, SQLAlchemy, and PostgreSQL for the backend; and Pinecone for vector search. Backend tests are planned with pytest. Supported runtime versions, package managers, and exact lint/type-check/frontend-test tools remain undecided. Once established, use the repository's documented setup and targeted checks rather than introducing unnecessary tooling.
 
 For implementation contributions:
 
