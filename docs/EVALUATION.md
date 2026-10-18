@@ -32,13 +32,19 @@ Report counts and denominators as well as rates. Compute metrics per modality an
 
 Use confidence intervals or report sample counts for small sets; do not present unstable rates as general guarantees. Human judgment needs a written rubric and, for consequential comparisons, independent review or adjudication.
 
+## Latency and failure cases
+
+Measure latency only on a documented environment and representative dataset. Separate upload, extraction/transcription, chunking/embedding, vector search, and generation timings. Record sample counts, percentile methodology, hardware, model/runtime versions, input sizes, concurrency, and whether cold-start/model-load time is included. No target or result is asserted here.
+
+Exercise malformed/unsupported/oversized files, empty extraction/transcripts, parser/FFmpeg/model failures, PostgreSQL outages, file-storage failures, Pinecone errors/timeouts, embedding/LLM errors, and invalid citations. Verify failures are explicit, processing state remains coherent, sensitive content and secrets are not leaked, and no failed request returns a success-shaped result.
+
 ## Procedure and acceptance gates
 
-1. Freeze a versioned dataset, split, annotation, and metric definitions before tuning.
-2. Record exact software revision, chunking parameters, embedding model/version, vector index settings, retrieval top-k/threshold, prompt version, and LLM/transcription model versions.
-3. Run extraction and retrieval tests, then grounded generation and abstention tests. Preserve raw metric inputs and aggregate results without retaining sensitive content unnecessarily.
-4. Compare each change against a baseline on the same held-out set. Set numeric release thresholds only after an initial measured baseline and product risk review; no target scores are assumed here.
-5. Investigate regressions by modality, source location, and failure category. Do not enable reranking in v1; consider it only if measured retrieval deficiencies justify a separate evaluation.
+1. Freeze a versioned dataset, train/dev/test split, annotation, and metric definitions before tuning.
+2. Record exact software revision, chunking parameters, embedding model/version, Pinecone index settings, top-k/threshold, prompts, and LLM/transcription model versions.
+3. Run component tests for extraction, storage, indexing, and retrieval, followed by grounded-answer, citation, and abstention evaluation. Retain only necessary inputs/results and avoid unnecessary sensitive source retention.
+4. Compare changes against a baseline on the same held-out set. Set numeric thresholds only after measuring a baseline and reviewing product risk; no target scores or results are asserted here.
+5. Keep regression fixtures for known parser/media/provider failures and API behavior. Investigate regressions per modality, source location, and failure category. Do not enable reranking in v1.
 
 ## Limitations
 

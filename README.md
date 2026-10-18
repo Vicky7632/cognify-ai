@@ -1,29 +1,58 @@
 # Cognify AI
 
-Cognify AI is a planned, standalone multimodal RAG service for turning documents, recordings, and videos into searchable, cited study material. It is designed to run independently and later integrate with the LectureIQ Express backend.
+Cognify AI is a planned, standalone multimodal RAG application for helping learners search and study their own materials. Users will be able to upload documents and recordings, ask questions grounded in those sources, and navigate citations back to source pages or timestamps.
 
-> **Status:** Documentation baseline only. No API, ingestion pipeline, vector database, transcription, or LLM integration is implemented yet.
+> **Current status:** Documentation and repository structure only. No frontend, API, database, extraction, transcription, vector search, or AI feature is implemented.
 
-## Planned capabilities
+## Problem and planned features
 
-- Extract text from PDF and TXT files; transcribe audio and video with source timing where available.
-- Index content for semantic retrieval and answer questions using retrieved evidence.
-- Provide summaries and study notes, with citations to document pages or media timestamps where available.
-- Abstain when retrieved evidence is insufficient. Retrieval and citations can reduce unsupported answers, but cannot eliminate hallucinations.
+Learning materials are spread across documents and recordings, making it difficult to find relevant explanations and review specific topics. Cognify AI is planned to:
 
-## Planned stack
+- Ingest PDF and TXT files, MP3/WAV audio, and MP4 video.
+- Extract text from PDFs/TXT and extract video audio with FFmpeg.
+- Transcribe audio/video with a locally run Whisper-compatible model, subject to model and hardware evaluation.
+- Chunk extracted content, generate embeddings, and store vectors/searchable metadata in Pinecone.
+- Retrieve relevant evidence for grounded answers with page/timestamp citations and abstain when evidence is insufficient.
+- Offer short and detailed summaries, topic-wise notes, key concepts, and transcripts.
 
-Python, FastAPI, Pydantic, pytest, Pinecone, an embedding model selected through evaluation, FFmpeg for video audio extraction, and a local Whisper-compatible transcription option subject to hardware and model evaluation. LLM provider logic will be replaceable. These components are proposed, not installed or configured.
+Retrieval and citations may reduce unsupported answers; they cannot guarantee or eliminate hallucinations. OCR, video-frame analysis, authentication, and reranking are out of v1 scope.
 
-## Start here
+## Planned architecture and stack
+
+```mermaid
+flowchart LR
+    User[User] --> UI[React + TypeScript + Vite + Tailwind]
+    UI --> API[FastAPI + Pydantic settings]
+    API --> SQL[(PostgreSQL via SQLAlchemy)]
+    API --> Files[File storage abstraction<br/>local filesystem initially]
+    API --> Extract[PDF/TXT extraction]
+    API --> Media[FFmpeg + local Whisper-compatible transcription]
+    Extract --> Pipeline[Shared chunking and ingestion pipeline]
+    Media --> Pipeline
+    Pipeline --> Embed[Embedding abstraction]
+    Embed --> Vector[(Pinecone)]
+    API --> Retrieve[Retrieval and citation assembly]
+    Retrieve --> Vector
+    Retrieve --> LLM[Replaceable LLM provider]
+```
+
+PostgreSQL is for relational application data and processing state. Pinecone is for embeddings and searchable vector metadata. Original files use a separate storage abstraction. Details and open decisions are in [the architecture document](docs/ARCHITECTURE.md).
+
+## Setup status
+
+There is no runnable application or dependency manifest yet. Setup and run instructions are therefore **pending**; no Python/Node dependencies or services are installed or configured by this baseline. See [CONTEXT.md](CONTEXT.md) and [ROADMAP.md](ROADMAP.md) before implementation.
+
+The [.env.example](.env.example) file lists planned configuration names with placeholders only. It is not an application configuration contract yet. Do not put secrets in frontend code or commit `.env`.
+
+## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) and [data flow](docs/DATA_FLOW.md)
-- [Proposed API](docs/API.md) (endpoints are not implemented)
-- [Roadmap](ROADMAP.md) and [evaluation plan](docs/EVALUATION.md)
-- [Project context for contributors and agents](CONTEXT.md)
+- [Proposed API contract](docs/API.md) (not implemented)
+- [Evaluation plan](docs/EVALUATION.md)
+- [Roadmap](ROADMAP.md), [contributor guide](CONTRIBUTING.md), and [persistent agent context](CONTEXT.md)
 
-Before implementation, review the open decisions in [the initial architecture decision](docs/decisions/0001-initial-architecture.md). Copy `.env.example` to `.env` only when local configuration is needed; never commit secrets.
+## Security and cost
 
-## Security note
+The initial MVP is unauthenticated and must not be exposed publicly without appropriate access controls. Treat uploads and extracted content as untrusted; apply file limits, safe temporary-file handling, timeouts, and explicit error handling when those features are implemented. Keep credentials on the backend and use a secret store for deployed environments.
 
-The v1 service is planned without authentication. Do not expose it publicly without suitable access controls, transport security, upload limits, and operational safeguards. See [architecture and security considerations](docs/ARCHITECTURE.md#security-and-privacy).
+Prefer local/free development options where practical. Pinecone is the planned vector service, but paid cloud infrastructure must not be a mandatory development dependency. Evaluate service tiers, quotas, model/runtime resource needs, licensing, and external-provider data handling before choosing operational defaults. Do not send private content to an external provider without an explicit privacy and retention decision.

@@ -1,11 +1,12 @@
-# Instructions for AI coding agents
+# Cognify AI agent instructions
 
-- Before making changes, read `CONTEXT.md` and the relevant documents in `docs/`; inspect the existing code, repository status, and project conventions.
-- Implement only the requested change and the active roadmap phase. Do not make unrelated edits, introduce speculative abstractions, or implement features marked proposed/planned without an explicit task.
-- Preserve existing user changes. Do not modify LectureIQ.
-- Keep provider-specific code replaceable where practical. Validate uploads, configuration, external responses, and failure cases; surface errors rather than silently returning success-shaped fallbacks.
-- Never hardcode or expose API keys. `.env.example` may contain placeholders only; do not commit `.env` or real credentials.
-- Follow the documented v1 scope: no authentication (not safe for public exposure), no reranking, and no claims that hallucinations are eliminated.
-- Add or update focused tests for behavior and failures. Run the smallest relevant test, lint, or type-check command available; do not claim checks that were not run.
-- Update directly related documentation when behavior or decisions change.
-- In the final report, list exact files changed and the validation commands/results; distinguish implemented behavior from plans and unresolved choices.
+- Read `CONTEXT.md` and the relevant documentation under `docs/` before coding.
+- Inspect existing code, repository status, and conventions before modifying files.
+- Make small, focused changes for the active roadmap phase. Preserve unrelated user changes; avoid unrelated edits and unnecessary dependencies/abstractions.
+- Do not access or modify LectureIQ. Future integration goes through its existing Express backend.
+- Never expose, hardcode, or commit secrets. Keep credentials out of frontend code; `.env.example` has placeholders only.
+- Keep PostgreSQL for relational application data, Pinecone for vectors/search metadata, and file storage separate.
+- Respect scope: no MVP authentication (never publicly expose without suitable controls); OCR, video-frame analysis, and reranking are not v1 requirements.
+- When implementing features, write and run appropriate tests, including failure cases. Never claim unrun checks passed; report exact commands/results.
+- Update relevant documentation when behavior or API contracts change. Distinguish implementation from proposals.
+- In the final report, list exact files changed, checks performed, and open decisions.
