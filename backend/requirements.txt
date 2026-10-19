@@ -1,5 +1,6 @@
 # Direct runtime and test dependencies
 fastapi==0.115.12
+httpx==0.28.1
 pydantic-settings==2.8.1
 pytest==8.3.5
 uvicorn==0.34.0
@@ -7,9 +8,11 @@ uvicorn==0.34.0
 # Resolved transitive dependencies pinned for repeatable pip installs
 annotated-types==0.8.0
 anyio==4.15.1
+certifi==2026.10.18
 click==8.5.0
 colorama==0.4.6
 h11==0.16.0
+httpcore==1.0.9
 idna==3.20
 iniconfig==2.3.1
 packaging==26.3

@@ -27,16 +27,24 @@ To verify the installed direct dependencies:
 python -c "import fastapi, pydantic_settings, pytest, uvicorn; print('FastAPI', fastapi.__version__); print('Pydantic Settings', pydantic_settings.__version__); print('pytest', pytest.__version__); print('Uvicorn', uvicorn.__version__)"
 ```
 
-When tests have been added, run them from `E:\Cognify\backend`:
+Run backend tests from `E:\Cognify\backend`:
 
 ```powershell
 python -m pytest
 ```
 
-There are currently no backend test cases, so pytest may report that no tests were collected until the backend skeleton phase adds tests.
+Start the development server from `E:\Cognify\backend`:
+
+```powershell
+python -m uvicorn app.main:app --reload
+```
+
+The health check is available at `http://127.0.0.1:8000/api/v1/health`; FastAPI's interactive API documentation remains available at `http://127.0.0.1:8000/docs`.
+
+The current test suite verifies the health endpoint only. Extend it as features are implemented.
 
 ## Configuration and safety
 
 Application settings are not implemented yet. The root `.env.example` exists and contains placeholder values for planned settings; it is a template, not a validated runtime configuration. Keep real credentials in an untracked `.env` or an appropriate secret store, never in source control or frontend variables. The root `.gitignore` excludes `.env` and `.venv` while allowing `.env.example` to be tracked.
 
-The initial MVP is unauthenticated and must not be exposed publicly without suitable access controls. No PostgreSQL/Pinecone integration, paid service, application behavior, or migrations are required to create the local Python environment.
+The initial MVP is unauthenticated and must not be exposed publicly without suitable access controls. No PostgreSQL/Pinecone integration, paid service, or migrations are required to run the health endpoint.
