@@ -1,6 +1,4 @@
-from fastapi import FastAPI
+from app.application import create_app
+from app.core.config import get_settings
 
-from app.api.v1 import router as v1_router
-
-app = FastAPI(title="Cognify AI")
-app.include_router(v1_router, prefix="/api/v1")
+app = create_app(get_settings())
