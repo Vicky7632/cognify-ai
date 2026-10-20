@@ -43,6 +43,10 @@ The health check is available at `http://127.0.0.1:8000/api/v1/health`; FastAPI'
 
 The current tests cover settings behavior and the health endpoint. Extend them as features are implemented.
 
+## Logging
+
+The application uses Python's standard logging module for fixed startup and shutdown lifecycle messages. It does not log configuration values, request bodies, uploaded content, credentials, or API keys. Configure logging output through the server/runtime environment; no additional logging package is required.
+
 ## Configuration and safety
 
 The minimal settings module reads `COGNIFY_APP_NAME` and `COGNIFY_API_V1_PREFIX` from process environment variables or the repository-root `.env`; environment variables take precedence. Names are case-insensitive, and unrelated variables are ignored. Defaults are `Cognify AI` and `/api/v1`. The repository-root path is resolved from the settings module, so loading does not depend on the current working directory. Runtime settings are cached once.
