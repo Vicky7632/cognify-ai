@@ -1,8 +1,10 @@
 # Direct runtime and test dependencies
 fastapi==0.115.12
 httpx==0.28.1
+psycopg[binary]==3.2.10
 pydantic-settings==2.8.1
 pytest==8.3.5
+sqlalchemy==2.0.43
 uvicorn==0.34.0
 
 # Resolved transitive dependencies pinned for repeatable pip installs
@@ -11,15 +13,18 @@ anyio==4.15.1
 certifi==2026.10.18
 click==8.5.0
 colorama==0.4.6
+greenlet==3.5.6
 h11==0.16.0
 httpcore==1.0.9
 idna==3.20
 iniconfig==2.3.1
 packaging==26.3
 pluggy==1.7.0
+psycopg-binary==3.2.10
 pydantic==2.14.1
 pydantic_core==2.50.1
 python-dotenv==1.2.4
 starlette==0.46.2
 typing-inspection==0.4.4
 typing_extensions==4.16.0
+tzdata==2026.5

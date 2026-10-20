@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -11,6 +11,7 @@ ENV_FILE = PROJECT_ROOT / ".env"
 class Settings(BaseSettings):
     app_name: str = "Cognify AI"
     api_v1_prefix: str = "/api/v1"
+    database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
 
     @field_validator("api_v1_prefix")
     @classmethod
@@ -27,6 +28,7 @@ class Settings(BaseSettings):
         env_prefix="COGNIFY_",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
     )
 
 
