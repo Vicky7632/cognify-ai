@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from app.core.config import ENV_FILE, PROJECT_ROOT, Settings
 
 
@@ -53,3 +56,9 @@ def test_environment_names_are_case_insensitive(monkeypatch) -> None:
     settings = Settings(_env_file=None)
 
     assert settings.app_name == "Case Insensitive Cognify"
+
+
+@pytest.mark.parametrize("api_v1_prefix", ("api/v1", "/api/v1/"))
+def test_rejects_invalid_api_v1_prefix(api_v1_prefix: str) -> None:
+    with pytest.raises(ValidationError, match="API v1 prefix"):
+        Settings(api_v1_prefix=api_v1_prefix, _env_file=None)
