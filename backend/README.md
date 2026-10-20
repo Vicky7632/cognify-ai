@@ -54,3 +54,22 @@ The minimal settings module reads `COGNIFY_APP_NAME` and `COGNIFY_API_V1_PREFIX`
 The root `.env.example` exists and contains placeholder values for planned settings; it is not loaded automatically. For a temporary PowerShell override, set `$env:COGNIFY_APP_NAME` or `$env:COGNIFY_API_V1_PREFIX` before starting the server; the override applies to that PowerShell session and its child processes. Alternatively, add only non-secret settings to the repository-root `.env`. Do not commit `.env`, print credentials, or put backend secrets in frontend variables. The root `.gitignore` excludes `.env` and `.venv` while allowing `.env.example` to be tracked. PostgreSQL, Pinecone, and LLM credentials are not required to import settings, start the health endpoint, or run tests.
 
 The initial MVP is unauthenticated and must not be exposed publicly without suitable access controls. No PostgreSQL/Pinecone integration, paid service, or migrations are required to run the health endpoint.
+
+## Week 1 milestone review
+
+### Implemented
+
+- Python 3.12 backend tooling with pinned FastAPI, Uvicorn, Pydantic Settings, pytest, and TestClient dependencies.
+- FastAPI application factory with a configurable application title and versioned API prefix.
+- `GET /api/v1/health`, returning HTTP 200 and exactly `{"status":"ok"}`; default FastAPI `/docs` remains enabled.
+- Pydantic Settings defaults, case-insensitive environment loading, unrelated-variable ignoring, repository-root `.env` path resolution, and cached runtime settings.
+- API prefix validation and fixed startup/shutdown lifecycle logs that do not include configuration or request data.
+- Automated tests for settings defaults/overrides/dotenv loading, valid and invalid prefixes, health behavior, and lifecycle logging.
+
+### Not implemented
+
+PostgreSQL connections, SQLAlchemy models, migrations, document persistence, file upload or extraction, Pinecone, embeddings, retrieval, generation, transcription, frontend screens, authentication, and deployment infrastructure remain out of scope.
+
+### Next milestone
+
+Add PostgreSQL connection and session management, then define and test the first document-related relational model. Keep that work separate from Pinecone vector storage and original-file storage. No database connection, model, or migration is included in this Week 1 milestone.
