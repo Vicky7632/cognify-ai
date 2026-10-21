@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status:** Target architecture. The backend currently implements a minimal FastAPI health endpoint, settings, lazy SQLAlchemy session foundation, and a `Document` ORM model. The broader integrations and multimodal RAG components described here remain planned.
+> **Status:** Target architecture. The backend currently implements a minimal FastAPI health endpoint, settings, lazy SQLAlchemy session foundation, a `Document` ORM model, and Alembic migrations. The broader integrations and multimodal RAG components described here remain planned.
 
 ## Goals and boundaries
 
@@ -41,7 +41,7 @@ The diagram expresses intended boundaries only. Pinecone is the planned vector s
 - **API boundary:** request validation, upload constraints, response schemas, and translation of known service failures to explicit HTTP errors.
 - **Settings:** typed configuration through Pydantic; secrets supplied via environment or a secret manager, never committed.
 - **Frontend:** upload/document management, chat, and summaries/notes/transcript views. Keep all provider/database credentials on the backend.
-- **Relational persistence:** SQLAlchemy/PostgreSQL for document records, processing status/errors, optional ownership/course associations, chat sessions/messages, and source/processing metadata. An initial `Document` ORM model is defined; creating tables and migrations remains future work.
+- **Relational persistence:** SQLAlchemy/PostgreSQL for document records, processing status/errors, optional ownership/course associations, chat sessions/messages, and source/processing metadata. The initial `Document` table has been created through Alembic; future schema changes must also use reviewed migrations.
 - **File storage:** independent abstraction for original files; local filesystem is acceptable initially. Define safe paths, lifecycle, and retention before implementation.
 - **Extraction:** direct PDF/TXT text extraction; MP3/WAV transcription; MP4 audio extraction with FFmpeg followed by transcription. Preserve page and timestamp provenance when available. OCR and video-frame analysis are deferred.
 - **Shared ingestion:** normalize extractor output, chunk content as appropriate, attach source metadata, generate embeddings, and persist vectors and retrievable text.
@@ -80,7 +80,7 @@ Extraction, transcription, embedding, vector-store, and LLM failures must be exp
 ## Open decisions
 
 1. Supported Python/Node versions, package managers, project layouts, and test/lint tools.
-2. PostgreSQL development setup and future ORM/migration conventions; PDF parser and upload limits.
+2. PostgreSQL development setup details; PDF parser and upload limits.
 3. File storage lifecycle/retention and cross-store deletion semantics.
 4. Embedding model/provider, dimensions, licensing, re-indexing strategy; Pinecone index, metadata, and cost controls.
 5. Whisper-compatible model/runtime, hardware, model license, and FFmpeg distribution.

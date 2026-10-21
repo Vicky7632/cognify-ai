@@ -2,7 +2,7 @@
 
 The backend is a standalone Python/FastAPI service using Pydantic Settings, SQLAlchemy, and PostgreSQL. Python **3.12.x** is the project target; Python 3.12.10 was available when this setup was verified. Direct runtime/test dependencies and their resolved transitive dependencies are pinned in [`requirements.txt`](requirements.txt) for repeatable pip installs. Pip manages a backend-local virtual environment; no additional dependency manager is required.
 
-The backend has a lazy PostgreSQL engine/session foundation and a SQLAlchemy `Document` model. The model is registered with shared metadata but no relational tables have been created and no migrations exist. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; original files use a separate storage abstraction, initially local filesystem.
+The backend has a lazy PostgreSQL engine/session foundation, a SQLAlchemy `Document` model, and Alembic-managed schema migrations. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; original files use a separate storage abstraction, initially local filesystem.
 
 ## Windows PowerShell setup
 
@@ -43,6 +43,19 @@ The health check is available at `http://127.0.0.1:8000/api/v1/health`; FastAPI'
 
 The current tests cover settings behavior, lazy database/session behavior, `Document` model metadata, lifecycle logging, and the health endpoint. They do not require a live PostgreSQL server. Extend them as features are implemented.
 
+## Database migrations
+
+The SQLAlchemy model defines metadata; Alembic migrations are the only supported workflow for changing database schemas. From `E:\Cognify\backend`, review the generated revision before applying it:
+
+```powershell
+python -m alembic current
+python -m alembic revision --autogenerate -m "describe schema change"
+python -m alembic upgrade head
+python -m alembic current
+```
+
+Alembic reads the existing `DATABASE_URL` from application settings. It does not print the URL. Use the configured local development database and inspect existing tables and migration history before the first upgrade. Review every generated revision for unexpected operations. Do not use `create_all()`, `drop_all()`, or `stamp head` as a substitute for migrations. Tests verify migration configuration/model registration without requiring a database.
+
 ## Logging
 
 The application uses Python's standard logging module for fixed startup and shutdown lifecycle messages. It does not log configuration values, request bodies, uploaded content, credentials, or API keys. Configure logging output through the server/runtime environment; no additional logging package is required.
@@ -55,7 +68,7 @@ The minimal settings module reads `COGNIFY_APP_NAME`, `COGNIFY_API_V1_PREFIX`, a
 
 The root `.env.example` contains placeholder values, including a sample local PostgreSQL URL, and is not loaded automatically. For a temporary PowerShell override, set `$env:COGNIFY_APP_NAME`, `$env:COGNIFY_API_V1_PREFIX`, or `$env:DATABASE_URL` before starting the server; the override applies to that PowerShell session and its child processes. Alternatively, add local settings to the repository-root `.env`. Do not commit `.env`, print credentials, or put backend secrets in frontend variables. The root `.gitignore` excludes `.env` and `.venv` while allowing `.env.example` to be tracked. Pinecone and LLM credentials are not needed to import settings, start the health endpoint, or run tests.
 
-The model and tests do not create tables or require a live PostgreSQL server. This model change did not retest the local connection verified during the previous milestone.
+The tests do not create tables or require a live PostgreSQL server. The initial migration was applied and verified against the configured local `cognify_ai` database during this milestone.
 
 The initial MVP is unauthenticated and must not be exposed publicly without suitable access controls. No live PostgreSQL connection, Pinecone service, paid service, or migrations are required to run the health endpoint.
 
@@ -76,4 +89,4 @@ At the Week 1 review, PostgreSQL connection/session management, SQLAlchemy model
 
 ### Next milestone
 
-The PostgreSQL connection/session foundation and initial `Document` model are now defined. The model has not been applied to a database. Next, decide and implement a migration workflow before creating tables; keep relational metadata separate from Pinecone vector storage and original-file storage.
+The initial Alembic migration created and verified the `documents` table in the configured local database. Next, build the document persistence/use-case layer on this schema; keep relational metadata separate from Pinecone vector storage and original-file storage.
