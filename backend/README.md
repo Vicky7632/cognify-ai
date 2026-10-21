@@ -2,7 +2,7 @@
 
 The backend is a standalone Python/FastAPI service using Pydantic Settings, SQLAlchemy, and PostgreSQL. Python **3.12.x** is the project target; Python 3.12.10 was available when this setup was verified. Direct runtime/test dependencies and their resolved transitive dependencies are pinned in [`requirements.txt`](requirements.txt) for repeatable pip installs. Pip manages a backend-local virtual environment; no additional dependency manager is required.
 
-The backend has a lazy PostgreSQL engine/session foundation, a SQLAlchemy `Document` model, and Alembic-managed schema migrations. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; original files use a separate storage abstraction, initially local filesystem.
+The backend has a minimal FastAPI health route, document metadata API, service/repository layers, a SQLAlchemy `Document` model, and Alembic-managed schema migrations. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; original files use a separate storage abstraction, initially local filesystem.
 
 ## Windows PowerShell setup
 
@@ -46,6 +46,12 @@ The current tests cover settings behavior, lazy database/session behavior, `Docu
 The document repository uses the session supplied by its caller and does not commit or roll back. Callers own transaction boundaries. Unit tests exercise repository operations against an isolated in-memory SQLite database and do not require PostgreSQL.
 
 `app/services/document_service.py` validates supported document file types and processing statuses, then delegates persistence operations to the repository. It accepts the caller-provided session and does not commit or roll back; transaction ownership remains with the caller.
+
+## Document metadata API
+
+The `/api/v1/documents` routes create, list, retrieve, update status, and delete document metadata only. Creation accepts a filename and one of the model-supported file types; it does not upload content or accept a client-provided filesystem path. The API reserves an internal relative pending storage key, but does not create a file. Response schemas exclude `storage_path`.
+
+Mutation routes own the request transaction and commit only on success; errors roll back. Repository and service methods only flush and leave transaction control to their caller. The service does not have authentication or document-level authorization. Keep it restricted to a trusted local environment; do not expose it publicly until suitable access controls are implemented.
 
 ## Database migrations
 

@@ -1,33 +1,46 @@
 # API
 
-> **Proposed, not implemented.** All endpoints use `/api/v1`. Paths, schemas, HTTP semantics, limits, and error format must be confirmed during implementation.
+> **Status:** The health endpoint and document metadata endpoints listed as implemented are available. Upload and AI endpoints remain proposals. All routes use `/api/v1`.
 
-## Proposed endpoints
+## Endpoints
 
 | Method | Path | Purpose | Status |
 |---|---|---|---|
-| `GET` | `/api/v1/health` | Basic process health; readiness semantics to define | Proposed |
-| `POST` | `/api/v1/documents` | Upload one PDF, TXT, MP3, WAV, or MP4 | Proposed |
-| `GET` | `/api/v1/documents` | List documents (pagination/filter contract to define) | Proposed |
-| `GET` | `/api/v1/documents/{document_id}` | Read document metadata and processing status | Proposed |
-| `DELETE` | `/api/v1/documents/{document_id}` | Delete metadata, vectors, and original according to defined lifecycle | Proposed |
+| `GET` | `/api/v1/health` | Basic process health; does not check database readiness | Implemented |
+| `POST` | `/api/v1/documents` | Create document metadata (no file upload) | Implemented |
+| `GET` | `/api/v1/documents` | List document metadata | Implemented |
+| `GET` | `/api/v1/documents/{document_id}` | Read document metadata and processing status | Implemented |
+| `PATCH` | `/api/v1/documents/{document_id}/status` | Update processing status | Implemented |
+| `DELETE` | `/api/v1/documents/{document_id}` | Delete the metadata record only | Implemented |
 | `POST` | `/api/v1/chat/sessions/{session_id}/messages` | Ask a question; return answer/abstention and citations | Proposed |
 | `POST` | `/api/v1/queries` | Optional stateless question route; whether needed remains open | Proposed |
 | `POST` | `/api/v1/documents/{document_id}/summaries` | Request short or detailed source-grounded summary | Proposed |
 | `POST` | `/api/v1/documents/{document_id}/study-notes` | Request topic-wise notes and key concepts | Proposed |
 | `GET` | `/api/v1/documents/{document_id}/transcript` | Read transcript after successful processing | Proposed |
 
-No asynchronous job model, persistence model, or status lifecycle has been selected. The ingestion endpoint may need to return a job identifier if processing is asynchronous; settle this before implementation.
+No asynchronous job model or ingestion behavior has been implemented. The ingestion endpoint may need to return a job identifier if processing is asynchronous; settle this before implementation.
 
-## Proposed request/response shape
+## Implemented document metadata endpoints
 
 ### `POST /api/v1/documents`
 
-Multipart upload of one PDF, TXT, MP3, WAV, or MP4 file. Validate actual content where practical, not only extension or client MIME type. Enforce configured upload limits. Return a document identifier and clear processing status; do not imply transcription or indexing succeeded until those stages do.
+Accepts JSON with `original_filename` (1-255 characters) and `file_type` (`pdf`, `txt`, `mp3`, `wav`, or `mp4`). Returns `201 Created` with the document ID, filename, type, processing status, and timestamps. A server-generated relative pending storage key is reserved internally; this endpoint does not upload or create a file. Clients cannot provide a filesystem path.
 
 ### `GET /api/v1/documents/{document_id}`
 
-Return document metadata and current processing status. Define whether failures expose a stable error code, retryability, and stage details without exposing secrets or extracted private content.
+Returns document metadata with `200 OK`, or `404 Not Found` when the UUID does not identify a record. The list endpoint returns the same metadata shape as an array. Responses never include `storage_path`.
+
+### `PATCH /api/v1/documents/{document_id}/status`
+
+Accepts JSON `{"status":"pending"}`, with status one of `pending`, `processing`, `completed`, or `failed`. Returns updated metadata with `200 OK`, `404 Not Found` for an unknown document, and `422 Unprocessable Entity` for invalid input.
+
+### `DELETE /api/v1/documents/{document_id}`
+
+Deletes the metadata record only and returns `204 No Content`, or `404 Not Found` if it does not exist. Original files and vectors are not managed by this endpoint.
+
+All writes execute in an explicit SQLAlchemy transaction at the API boundary; success commits and exceptions roll back. The repository and service do not commit. The API has no authentication or document-level authorization and must remain restricted to a trusted local environment until suitable access controls are implemented.
+
+## Proposed request/response shape
 
 ### `POST /api/v1/chat/sessions/{session_id}/messages`
 
@@ -70,4 +83,4 @@ Use explicit, stable error responses for invalid file type, upload too large, ma
 
 ## Security and compatibility
 
-V1 is planned without authentication and is not safe for public exposure. Add suitable access controls before exposing it beyond a trusted local environment. Keep Cognify AI independently runnable; future LectureIQ integration should call this service through LectureIQ's Express backend and establish service authentication, timeout/retry, and error mapping separately.
+The current service has no authentication or document-level authorization and is not safe for public exposure. Restrict it to a trusted local environment until suitable access controls are implemented. Keep Cognify AI independently runnable; future LectureIQ integration should call this service through LectureIQ's Express backend and establish service authentication, timeout/retry, and error mapping separately.

@@ -39,9 +39,9 @@ When application work begins, keep a clear separation between API/transport, ing
 
 ## Current phase and next phase
 
-**Current phase:** Week 2, Day 12. The minimal backend, PostgreSQL connection/session foundation, `Document` ORM model, Alembic migration workflow, session-based repository, and document service/use-case layer are implemented. The initial migration has created the `documents` table in the configured local development database.
+**Current phase:** Week 2, Day 13. The backend includes the health endpoint, document metadata API, PostgreSQL session foundation, `Document` model, Alembic migration, and document repository/service layers. Document API access is unauthenticated and must remain restricted to a trusted local environment.
 
-**Next planned phase:** Add document API behavior in its roadmap phase. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
+**Next planned phase:** Implement document upload/storage and processing only in their designated roadmap phases, with suitable access controls before public exposure. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
 
 ## Open decisions
 
