@@ -18,6 +18,8 @@ The yielded session is closed after request handling. Transaction commit/rollbac
 
 Repository operations flush changes but never commit or roll back. The caller owns the transaction and decides whether to commit or roll it back. Repository methods return ORM records for internal persistence use; API schemas and responses are separate future work and must not expose local storage paths.
 
+`app/services/document_service.py` provides the corresponding document use cases, validates file types and statuses against the model's enums, and delegates all persistence to the repository. It also leaves commit and rollback decisions to its caller.
+
 ## Migration workflow
 
 Run commands from `backend/` with its virtual environment active. Alembic loads `DATABASE_URL` using the application settings and imports `app.models` to expose all model metadata for autogeneration:

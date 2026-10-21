@@ -15,11 +15,21 @@ class DocumentStatus(StrEnum):
     FAILED = "failed"
 
 
+class DocumentFileType(StrEnum):
+    PDF = "pdf"
+    TXT = "txt"
+    MP3 = "mp3"
+    WAV = "wav"
+    MP4 = "mp4"
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
         CheckConstraint(
-            "file_type IN ('pdf', 'txt', 'mp3', 'wav', 'mp4')",
+            "file_type IN ("
+            + ", ".join(f"'{file_type.value}'" for file_type in DocumentFileType)
+            + ")",
             name="ck_documents_file_type",
         ),
         CheckConstraint(
