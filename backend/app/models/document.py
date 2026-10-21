@@ -1,10 +1,18 @@
 from datetime import datetime
+from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import CheckConstraint, DateTime, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+
+
+class DocumentStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class Document(Base):
@@ -15,7 +23,9 @@ class Document(Base):
             name="ck_documents_file_type",
         ),
         CheckConstraint(
-            "processing_status IN ('pending', 'processing', 'completed', 'failed')",
+            "processing_status IN ("
+            + ", ".join(f"'{status.value}'" for status in DocumentStatus)
+            + ")",
             name="ck_documents_processing_status",
         ),
     )
@@ -27,8 +37,8 @@ class Document(Base):
     processing_status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
-        default="pending",
-        server_default=text("'pending'"),
+        default=DocumentStatus.PENDING.value,
+        server_default=text(f"'{DocumentStatus.PENDING.value}'"),
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

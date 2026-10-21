@@ -12,6 +12,12 @@ This is an ORM model definition, while schema creation and changes are managed s
 
 The yielded session is closed after request handling. Transaction commit/rollback policy belongs to the future service-of-work layer.
 
+## Document repository
+
+`app/repositories/document_repository.py` provides create, get-by-ID, list, status-update, and delete operations using the caller-provided SQLAlchemy session. Listing is ordered by creation time descending, with UUID ascending as a deterministic tie-breaker. Missing documents return `None` for get/status-update and `False` for delete. Unsupported status updates raise `ValueError`.
+
+Repository operations flush changes but never commit or roll back. The caller owns the transaction and decides whether to commit or roll it back. Repository methods return ORM records for internal persistence use; API schemas and responses are separate future work and must not expose local storage paths.
+
 ## Migration workflow
 
 Run commands from `backend/` with its virtual environment active. Alembic loads `DATABASE_URL` using the application settings and imports `app.models` to expose all model metadata for autogeneration:

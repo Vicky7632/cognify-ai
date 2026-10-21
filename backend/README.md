@@ -41,7 +41,9 @@ python -m uvicorn app.main:app --reload
 
 The health check is available at `http://127.0.0.1:8000/api/v1/health`; FastAPI's interactive API documentation remains available at `http://127.0.0.1:8000/docs`.
 
-The current tests cover settings behavior, lazy database/session behavior, `Document` model metadata, lifecycle logging, and the health endpoint. They do not require a live PostgreSQL server. Extend them as features are implemented.
+The current tests cover settings behavior, lazy database/session behavior, `Document` model metadata and repository operations, lifecycle logging, and the health endpoint. They do not require a live PostgreSQL server. Extend them as features are implemented.
+
+The document repository uses the session supplied by its caller and does not commit or roll back. Callers own transaction boundaries. Unit tests exercise repository operations against an isolated in-memory SQLite database and do not require PostgreSQL.
 
 ## Database migrations
 
