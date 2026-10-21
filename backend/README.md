@@ -2,7 +2,7 @@
 
 The backend is a standalone Python/FastAPI service using Pydantic Settings, SQLAlchemy, and PostgreSQL. Python **3.12.x** is the project target; Python 3.12.10 was available when this setup was verified. Direct runtime/test dependencies and their resolved transitive dependencies are pinned in [`requirements.txt`](requirements.txt) for repeatable pip installs. Pip manages a backend-local virtual environment; no additional dependency manager is required.
 
-The backend now has a lazy PostgreSQL engine and SQLAlchemy session dependency foundation, but no relational models, tables, or migrations. PostgreSQL will hold relational application metadata; Pinecone will hold vectors and searchable metadata; original files use a separate storage abstraction, initially local filesystem.
+The backend has a lazy PostgreSQL engine/session foundation and a SQLAlchemy `Document` model. The model is registered with shared metadata but no relational tables have been created and no migrations exist. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; original files use a separate storage abstraction, initially local filesystem.
 
 ## Windows PowerShell setup
 
@@ -41,7 +41,7 @@ python -m uvicorn app.main:app --reload
 
 The health check is available at `http://127.0.0.1:8000/api/v1/health`; FastAPI's interactive API documentation remains available at `http://127.0.0.1:8000/docs`.
 
-The current tests cover settings behavior, lazy database/session behavior, lifecycle logging, and the health endpoint. Extend them as features are implemented.
+The current tests cover settings behavior, lazy database/session behavior, `Document` model metadata, lifecycle logging, and the health endpoint. They do not require a live PostgreSQL server. Extend them as features are implemented.
 
 ## Logging
 
@@ -55,7 +55,7 @@ The minimal settings module reads `COGNIFY_APP_NAME`, `COGNIFY_API_V1_PREFIX`, a
 
 The root `.env.example` contains placeholder values, including a sample local PostgreSQL URL, and is not loaded automatically. For a temporary PowerShell override, set `$env:COGNIFY_APP_NAME`, `$env:COGNIFY_API_V1_PREFIX`, or `$env:DATABASE_URL` before starting the server; the override applies to that PowerShell session and its child processes. Alternatively, add local settings to the repository-root `.env`. Do not commit `.env`, print credentials, or put backend secrets in frontend variables. The root `.gitignore` excludes `.env` and `.venv` while allowing `.env.example` to be tracked. Pinecone and LLM credentials are not needed to import settings, start the health endpoint, or run tests.
 
-The current tests mock the engine/session boundary and do not require or connect to a PostgreSQL server. A live database connection has not been verified.
+The model and tests do not create tables or require a live PostgreSQL server. This model change did not retest the local connection verified during the previous milestone.
 
 The initial MVP is unauthenticated and must not be exposed publicly without suitable access controls. No live PostgreSQL connection, Pinecone service, paid service, or migrations are required to run the health endpoint.
 
@@ -76,4 +76,4 @@ At the Week 1 review, PostgreSQL connection/session management, SQLAlchemy model
 
 ### Next milestone
 
-The planned PostgreSQL connection/session foundation is now in place. Next, define and test the first document-related relational model and decide the migration workflow. Keep that work separate from Pinecone vector storage and original-file storage; no model or migration is included yet.
+The PostgreSQL connection/session foundation and initial `Document` model are now defined. The model has not been applied to a database. Next, decide and implement a migration workflow before creating tables; keep relational metadata separate from Pinecone vector storage and original-file storage.

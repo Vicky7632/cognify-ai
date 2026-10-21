@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status:** Planned architecture. No application components or integrations described here are implemented.
+> **Status:** Target architecture. The backend currently implements a minimal FastAPI health endpoint, settings, lazy SQLAlchemy session foundation, and a `Document` ORM model. The broader integrations and multimodal RAG components described here remain planned.
 
 ## Goals and boundaries
 
@@ -41,7 +41,7 @@ The diagram expresses intended boundaries only. Pinecone is the planned vector s
 - **API boundary:** request validation, upload constraints, response schemas, and translation of known service failures to explicit HTTP errors.
 - **Settings:** typed configuration through Pydantic; secrets supplied via environment or a secret manager, never committed.
 - **Frontend:** upload/document management, chat, and summaries/notes/transcript views. Keep all provider/database credentials on the backend.
-- **Relational persistence:** SQLAlchemy/PostgreSQL for document records, processing status/errors, optional ownership/course associations, chat sessions/messages, and source/processing metadata. Tables and migrations are outside the current phase.
+- **Relational persistence:** SQLAlchemy/PostgreSQL for document records, processing status/errors, optional ownership/course associations, chat sessions/messages, and source/processing metadata. An initial `Document` ORM model is defined; creating tables and migrations remains future work.
 - **File storage:** independent abstraction for original files; local filesystem is acceptable initially. Define safe paths, lifecycle, and retention before implementation.
 - **Extraction:** direct PDF/TXT text extraction; MP3/WAV transcription; MP4 audio extraction with FFmpeg followed by transcription. Preserve page and timestamp provenance when available. OCR and video-frame analysis are deferred.
 - **Shared ingestion:** normalize extractor output, chunk content as appropriate, attach source metadata, generate embeddings, and persist vectors and retrievable text.

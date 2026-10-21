@@ -49,3 +49,8 @@ data/
 uploads/
 artifacts/
 models/
+!backend/app/models/
+!backend/app/models/*.py
+backend/app/models/README.md
+backend/app/models/__pycache__/
+backend/app/models/*.py[cod]
