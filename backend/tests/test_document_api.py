@@ -4,6 +4,7 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -39,10 +40,30 @@ def client() -> Generator[TestClient, None, None]:
             yield session
 
     transaction_events: list[str] = []
+    failing_statements: set[str] = set()
+
+    def fail_selected_statement(
+        connection,
+        cursor,
+        statement: str,
+        parameters,
+        context,
+        executemany: bool,
+    ) -> None:
+        sql_operation = statement.lstrip().split(maxsplit=1)[0].upper()
+        if sql_operation in failing_statements:
+            raise OperationalError(
+                statement,
+                parameters,
+                Exception("synthetic database detail"),
+            )
+
+    event.listen(engine, "before_cursor_execute", fail_selected_statement)
     app = create_app(Settings(_env_file=None))
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
+    with TestClient(app, raise_server_exceptions=False) as test_client:
         app.state.transaction_events = transaction_events
+        app.state.failing_statements = failing_statements
         yield test_client
     app.dependency_overrides.clear()
     Base.metadata.drop_all(engine)
@@ -76,6 +97,16 @@ def test_create_does_not_accept_client_storage_paths(client: TestClient) -> None
     )
 
     assert response.status_code == 422
+
+
+def test_create_preserves_legitimate_unicode_filename(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/documents",
+        json={"original_filename": "講義ノート.pdf", "file_type": "pdf"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["original_filename"] == "講義ノート.pdf"
 
 
 @pytest.mark.parametrize(
@@ -227,3 +258,66 @@ def test_missing_mutation_rolls_back_transaction(client: TestClient) -> None:
 
     assert response.status_code == 404
     assert client.app.state.transaction_events == ["rollback"]
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "operation"),
+    [
+        (
+            "post",
+            "/api/v1/documents",
+            {"original_filename": "failed.pdf", "file_type": "pdf"},
+            "INSERT",
+        ),
+        (
+            "patch",
+            "/api/v1/documents/00000000-0000-0000-0000-000000000001/status",
+            {"status": "completed"},
+            "UPDATE",
+        ),
+        (
+            "delete",
+            "/api/v1/documents/00000000-0000-0000-0000-000000000001",
+            None,
+            "DELETE",
+        ),
+    ],
+)
+def test_database_operation_failure_rolls_back_and_hides_details(
+    client: TestClient,
+    method: str,
+    path: str,
+    body: dict[str, str] | None,
+    operation: str,
+) -> None:
+    if operation != "INSERT":
+        created = client.post(
+            "/api/v1/documents",
+            json={"original_filename": "existing.pdf", "file_type": "pdf"},
+        )
+        document_id = created.json()["id"]
+        path = path.replace(
+            "00000000-0000-0000-0000-000000000001",
+            document_id,
+        )
+        client.app.state.transaction_events.clear()
+
+    client.app.state.failing_statements.add(operation)
+    response = getattr(client, method)(path, json=body) if body else getattr(client, method)(path)
+    client.app.state.failing_statements.clear()
+
+    assert response.status_code == 500
+    assert "synthetic database detail" not in response.text
+    assert client.app.state.transaction_events == ["rollback"]
+
+    if operation == "INSERT":
+        assert client.get("/api/v1/documents").json() == []
+    elif operation == "UPDATE":
+        assert (
+            client.get(f"/api/v1/documents/{document_id}").json()[
+                "processing_status"
+            ]
+            == "pending"
+        )
+    else:
+        assert client.get(f"/api/v1/documents/{document_id}").status_code == 200
