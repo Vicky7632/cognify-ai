@@ -1,6 +1,6 @@
 # API
 
-> **Status:** The health endpoint and document metadata endpoints listed as implemented are available. Upload and AI endpoints remain proposals. All routes use `/api/v1`.
+> **Status:** The health endpoint, document metadata endpoints, and document upload endpoint are implemented. AI endpoints remain proposals. All routes use `/api/v1`.
 
 ## Endpoints
 
@@ -8,6 +8,7 @@
 |---|---|---|---|
 | `GET` | `/api/v1/health` | Basic process health; does not check database readiness | Implemented |
 | `POST` | `/api/v1/documents` | Create document metadata (no file upload) | Implemented |
+| `POST` | `/api/v1/documents/upload` | Upload one supported file and create metadata | Implemented |
 | `GET` | `/api/v1/documents` | List document metadata | Implemented |
 | `GET` | `/api/v1/documents/{document_id}` | Read document metadata and processing status | Implemented |
 | `PATCH` | `/api/v1/documents/{document_id}/status` | Update processing status | Implemented |
@@ -21,6 +22,33 @@
 No asynchronous job model or ingestion behavior has been implemented. The ingestion endpoint may need to return a job identifier if processing is asynchronous; settle this before implementation.
 
 ## Implemented document metadata endpoints
+
+### `POST /api/v1/documents/upload`
+
+Accepts exactly one multipart/form-data field named `file`, containing exactly one file. Supported filename extensions are `.pdf`, `.txt`, `.mp3`, `.wav`, and `.mp4`. Filenames must be 1–255 characters and cannot contain path/drive separators or control characters; Unicode is supported. Maximum size defaults to 25 MiB (`COGNIFY_MAX_UPLOAD_SIZE_BYTES`). The upload root defaults to repository-root `storage/uploads` and can be configured with `COGNIFY_UPLOAD_ROOT`.
+
+The service checks the extension and basic file signatures; TXT is decoded as UTF-8. These checks do not fully parse or sanitize formats. There is no malware scanning. A successful upload returns `201 Created` with the document metadata shape below; internal storage paths are not returned. Invalid/empty content returns `422`, unsupported extensions return `415`, oversized files return `413`, and storage/database failures return generic `500` responses.
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/api/v1/documents/upload -F "file=@lecture.pdf"
+```
+
+Example success response (`201 Created`):
+
+```json
+{
+  "id": "d07962f8-c430-4b0b-b4bb-38ca63c1c083",
+  "original_filename": "lecture.pdf",
+  "file_type": "pdf",
+  "processing_status": "pending",
+  "created_at": "2025-01-01T12:00:00Z",
+  "updated_at": "2025-01-01T12:00:00Z"
+}
+```
+
+Errors use FastAPI's `{"detail":"..."}` shape: invalid filename/content or missing/multiple files return `422`, unsupported extensions return `415`, oversized files return `413`, and storage/database failures return a generic `500`.
+
+Files are stored under a random server-generated key, never under the client filename. Writes are streamed in bounded chunks, and failed writes are cleaned up when possible. Database failure after storage triggers best-effort deletion of the new file. Because filesystem writes and PostgreSQL transactions are not atomic together, process termination or cleanup failure may leave an orphaned file.
 
 ### `POST /api/v1/documents`
 

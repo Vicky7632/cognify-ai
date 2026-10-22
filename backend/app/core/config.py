@@ -12,6 +12,15 @@ class Settings(BaseSettings):
     app_name: str = "Cognify AI"
     api_v1_prefix: str = "/api/v1"
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    upload_root: Path = PROJECT_ROOT / "storage" / "uploads"
+    max_upload_size_bytes: int = 25 * 1024 * 1024
+
+    @field_validator("upload_root")
+    @classmethod
+    def resolve_upload_root(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            return PROJECT_ROOT / value
+        return value
 
     @field_validator("api_v1_prefix")
     @classmethod
@@ -20,6 +29,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "API v1 prefix must start with '/' and must not end with '/'."
             )
+        return value
+
+    @field_validator("max_upload_size_bytes")
+    @classmethod
+    def validate_max_upload_size_bytes(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Maximum upload size must be greater than zero.")
         return value
 
     model_config = SettingsConfigDict(

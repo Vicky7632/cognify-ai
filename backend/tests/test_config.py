@@ -11,6 +11,8 @@ def clear_application_environment(monkeypatch) -> None:
     for variable in (
         "COGNIFY_APP_NAME",
         "COGNIFY_API_V1_PREFIX",
+        "COGNIFY_UPLOAD_ROOT",
+        "COGNIFY_MAX_UPLOAD_SIZE_BYTES",
         "DATABASE_URL",
     ):
         monkeypatch.delenv(variable, raising=False)
@@ -22,6 +24,19 @@ def test_defaults_without_environment_or_dotenv(monkeypatch) -> None:
     assert settings.app_name == "Cognify AI"
     assert settings.api_v1_prefix == "/api/v1"
     assert settings.database_url is None
+    assert settings.max_upload_size_bytes == 25 * 1024 * 1024
+    assert settings.upload_root == PROJECT_ROOT / "storage" / "uploads"
+
+
+def test_rejects_nonpositive_maximum_upload_size() -> None:
+    with pytest.raises(ValidationError, match="Maximum upload size"):
+        Settings(max_upload_size_bytes=0, _env_file=None)
+
+
+def test_resolves_relative_upload_root_from_repository_root() -> None:
+    settings = Settings(upload_root=Path("storage/uploads"), _env_file=None)
+
+    assert settings.upload_root == PROJECT_ROOT / "storage" / "uploads"
 
 
 def test_environment_variables_override_defaults(monkeypatch) -> None:

@@ -18,5 +18,6 @@ def create_app(settings: Settings) -> FastAPI:
         logger.info("Application shutdown complete")
 
     application = FastAPI(title=settings.app_name, lifespan=lifespan)
+    application.state.settings = settings
     application.include_router(v1_router, prefix=settings.api_v1_prefix)
     return application

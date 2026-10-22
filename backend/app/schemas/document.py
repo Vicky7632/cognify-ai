@@ -15,12 +15,7 @@ class DocumentCreateRequest(BaseModel):
     @field_validator("original_filename")
     @classmethod
     def validate_original_filename(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("Filename must not be empty or whitespace-only.")
-        if "/" in value or "\\" in value:
-            raise ValueError("Filename must not contain path separators.")
-        return value
+        return validate_document_filename(value)
 
 
 class DocumentStatusUpdateRequest(BaseModel):
@@ -42,3 +37,16 @@ class DocumentResponse(BaseModel):
 
 def to_document_response(document: Document) -> DocumentResponse:
     return DocumentResponse.model_validate(document)
+
+
+def validate_document_filename(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("Filename must not be empty or whitespace-only.")
+    if len(value) > 255:
+        raise ValueError("Filename must be at most 255 characters.")
+    if any(character in value for character in ("/", "\\", "\0", ":")):
+        raise ValueError("Filename must not contain path or drive separators.")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError("Filename must not contain control characters.")
+    return value

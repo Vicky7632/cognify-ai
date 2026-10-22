@@ -2,7 +2,7 @@
 
 The backend is a standalone Python/FastAPI service using Pydantic Settings, SQLAlchemy, and PostgreSQL. Python **3.12.x** is the project target; Python 3.12.10 was available when this setup was verified. Direct runtime/test dependencies and their resolved transitive dependencies are pinned in [`requirements.txt`](requirements.txt) for repeatable pip installs. Pip manages a backend-local virtual environment; no additional dependency manager is required.
 
-The backend has a minimal FastAPI health route, document metadata API, service/repository layers, a SQLAlchemy `Document` model, and Alembic-managed schema migrations. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; original files use a separate storage abstraction, initially local filesystem.
+The backend has a minimal FastAPI health route, document metadata API, multipart document upload, service/repository layers, a SQLAlchemy `Document` model, and Alembic-managed schema migrations. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; originals are stored under the configured local upload root.
 
 ## Windows PowerShell setup
 
@@ -41,7 +41,7 @@ python -m uvicorn app.main:app --reload
 
 The health check is available at `http://127.0.0.1:8000/api/v1/health`; FastAPI's interactive API documentation remains available at `http://127.0.0.1:8000/docs`.
 
-The current tests cover settings behavior, lazy database/session behavior, `Document` model metadata, repository and service operations, lifecycle logging, and the health endpoint. They do not require a live PostgreSQL server. Extend them as features are implemented.
+The current tests cover settings behavior, lazy database/session behavior, `Document` model metadata, repository and service operations, upload/storage failures, lifecycle logging, and API behavior. Database tests use isolated SQLite and do not require a live PostgreSQL server.
 
 The document repository uses the session supplied by its caller and does not commit or roll back. Callers own transaction boundaries. Unit tests exercise repository operations against an isolated in-memory SQLite database and do not require PostgreSQL.
 
@@ -49,7 +49,21 @@ The document repository uses the session supplied by its caller and does not com
 
 ## Document metadata API
 
-The `/api/v1/documents` routes create, list, retrieve, update status, and delete document metadata only. Creation accepts a filename and one of the model-supported file types; it does not upload content or accept a client-provided filesystem path. The API reserves an internal relative pending storage key, but does not create a file. Response schemas exclude `storage_path`.
+`POST /api/v1/documents/upload` accepts one multipart field named `file` and uploads a PDF, TXT, MP3, WAV, or MP4. The maximum size defaults to **25 MiB** and is configurable with `COGNIFY_MAX_UPLOAD_SIZE_BYTES`. The local storage root defaults to the repository's `storage/uploads` directory and is configurable with `COGNIFY_UPLOAD_ROOT`. Stored names are random server-generated identifiers; original filenames are metadata only. Responses exclude storage paths and keys.
+
+The request must contain exactly one multipart field, `file`, and exactly one file. Filenames must be 1–255 characters, contain no path separators/control characters, and use a supported extension. Unicode filenames are supported.
+
+Example from the repository root:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/api/v1/documents/upload -F "file=@lecture.pdf"
+```
+
+Successful uploads return `201 Created` with document ID, original filename, file type, processing status, and timestamps. Invalid/missing files return `422`, unsupported extensions return `415`, size-limit violations return `413`, and storage/database failures return generic `500` responses without internal paths or exception details. File type checks use basic signatures (and strict UTF-8 decoding for TXT) in addition to the extension; they are not substitutes for format-specific parsers or malware scanning.
+
+Uploads are streamed in bounded chunks to a temporary-unique server-generated path, with exclusive creation and partial-file cleanup. The API then stores the document row in a database transaction. If database persistence fails, it attempts to remove the newly written file and logs a fixed message if cleanup fails. The filesystem and PostgreSQL do not share a distributed transaction, so abrupt process termination or cleanup failure can leave an orphaned file; automated reconciliation/retention is future work. No file-serving or download route is provided.
+
+The existing `/api/v1/documents` routes create, list, retrieve, update status, and delete metadata only. Metadata creation does not accept a client-provided filesystem path. Response schemas exclude `storage_path`.
 
 Mutation routes own the request transaction and commit only on success; errors roll back. Repository and service methods only flush and leave transaction control to their caller. The service does not have authentication or document-level authorization. Keep it restricted to a trusted local environment; do not expose it publicly until suitable access controls are implemented.
 
@@ -72,11 +86,11 @@ The application uses Python's standard logging module for fixed startup and shut
 
 ## Configuration and safety
 
-The minimal settings module reads `COGNIFY_APP_NAME`, `COGNIFY_API_V1_PREFIX`, and optional `DATABASE_URL` from process environment variables or the repository-root `.env`; environment variables take precedence. Names are case-insensitive, and unrelated variables are ignored. Defaults are `Cognify AI`, `/api/v1`, and no database URL. Configured API prefixes must start with `/` and must not end with `/`. The repository-root path is resolved from the settings module, so loading does not depend on the current working directory. Runtime settings are cached once.
+The minimal settings module reads `COGNIFY_APP_NAME`, `COGNIFY_API_V1_PREFIX`, `COGNIFY_UPLOAD_ROOT`, `COGNIFY_MAX_UPLOAD_SIZE_BYTES`, and optional `DATABASE_URL` from process environment variables or the repository-root `.env`; environment variables take precedence. Names are case-insensitive, and unrelated variables are ignored. Defaults are `Cognify AI`, `/api/v1`, the repository-root `storage/uploads` directory, a 25 MiB upload limit, and no database URL. Relative upload-root values are resolved from the repository root. Configured API prefixes must start with `/` and must not end with `/`. Runtime settings are cached once.
 
 `DATABASE_URL` is optional for application startup and the health endpoint. When a route later requests a database session, the cached SQLAlchemy engine is created lazily from `DATABASE_URL`; if it is absent, the database dependency raises an explicit configuration error. Session cleanup is handled by the `get_db` dependency. The engine uses `pool_pre_ping`; no connection is opened merely by importing the app or constructing the engine.
 
-The root `.env.example` contains placeholder values, including a sample local PostgreSQL URL, and is not loaded automatically. For a temporary PowerShell override, set `$env:COGNIFY_APP_NAME`, `$env:COGNIFY_API_V1_PREFIX`, or `$env:DATABASE_URL` before starting the server; the override applies to that PowerShell session and its child processes. Alternatively, add local settings to the repository-root `.env`. Do not commit `.env`, print credentials, or put backend secrets in frontend variables. The root `.gitignore` excludes `.env` and `.venv` while allowing `.env.example` to be tracked. Pinecone and LLM credentials are not needed to import settings, start the health endpoint, or run tests.
+The root `.env.example` contains placeholder values, including a sample local PostgreSQL URL, and is not loaded automatically. For temporary PowerShell overrides, set `$env:COGNIFY_APP_NAME`, `$env:COGNIFY_API_V1_PREFIX`, `$env:COGNIFY_UPLOAD_ROOT`, `$env:COGNIFY_MAX_UPLOAD_SIZE_BYTES`, or `$env:DATABASE_URL` before starting the server; the override applies to that PowerShell session and its child processes. Alternatively, add local settings to the repository-root `.env`. Do not commit `.env`, print credentials, or put backend secrets in frontend variables. The root `.gitignore` excludes `.env` and `.venv` while allowing `.env.example` to be tracked. Pinecone and LLM credentials are not needed to import settings, start the health endpoint, or run tests.
 
 The tests do not create tables or require a live PostgreSQL server. The initial migration was applied and verified against the configured local `cognify_ai` database during this milestone.
 

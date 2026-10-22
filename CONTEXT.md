@@ -39,9 +39,9 @@ When application work begins, keep a clear separation between API/transport, ing
 
 ## Current phase and next phase
 
-**Current phase:** Week 2, Day 13. The backend includes the health endpoint, document metadata API, PostgreSQL session foundation, `Document` model, Alembic migration, and document repository/service layers. Document API access is unauthenticated and must remain restricted to a trusted local environment.
+**Current phase:** Week 3, Day 15. The backend includes the health endpoint, document metadata and multipart upload APIs, PostgreSQL session foundation, `Document` model, Alembic migration, document repository/service layers, and local filesystem upload storage. Document API access is unauthenticated and must remain restricted to a trusted local environment.
 
-**Next planned phase:** Implement document upload/storage and processing only in their designated roadmap phases, with suitable access controls before public exposure. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
+**Next planned phase:** Prepare uploaded files for document processing only in its designated roadmap phase, with suitable access controls before public exposure. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
 
 ## Open decisions
 
