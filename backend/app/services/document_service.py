@@ -2,8 +2,28 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.document import Document, DocumentFileType, DocumentStatus
+from app.models.document import (
+    Document,
+    DocumentFileType,
+    DocumentProcessingErrorCode,
+    DocumentStatus,
+)
 from app.repositories import document_repository
+
+
+class InvalidDocumentTransitionError(ValueError):
+    pass
+
+
+ALLOWED_PREVIOUS_STATUSES = {
+    DocumentStatus.PROCESSING: (
+        DocumentStatus.PENDING,
+        DocumentStatus.UPLOADED,
+        DocumentStatus.FAILED,
+    ),
+    DocumentStatus.COMPLETED: (DocumentStatus.PROCESSING,),
+    DocumentStatus.FAILED: (DocumentStatus.PROCESSING,),
+}
 
 
 def create_document(
@@ -12,6 +32,7 @@ def create_document(
     original_filename: str,
     file_type: str,
     storage_path: str,
+    processing_status: DocumentStatus = DocumentStatus.PENDING,
 ) -> Document:
     """Create a document record; transaction ownership stays with the caller."""
     try:
@@ -24,6 +45,7 @@ def create_document(
         original_filename=original_filename,
         file_type=valid_file_type.value,
         storage_path=storage_path,
+        processing_status=processing_status,
     )
 
 
@@ -42,17 +64,36 @@ def update_document_status(
     document_id: UUID,
     status: DocumentStatus | str,
 ) -> Document | None:
-    """Update a supported status without committing the caller's transaction."""
+    """Apply one allowed status transition without committing the caller's transaction."""
     try:
         valid_status = DocumentStatus(status)
     except ValueError as error:
         raise ValueError(f"Unsupported document status: {status!r}") from error
 
-    return document_repository.update_document_status(
+    expected_statuses = ALLOWED_PREVIOUS_STATUSES.get(valid_status)
+    if expected_statuses is None:
+        raise InvalidDocumentTransitionError(
+            f"Transition to {valid_status.value!r} is not allowed."
+        )
+
+    error_code = (
+        DocumentProcessingErrorCode.PROCESSING_FAILED
+        if valid_status is DocumentStatus.FAILED
+        else None
+    )
+    document, transitioned = document_repository.update_document_status(
         session,
         document_id,
         valid_status,
+        expected_statuses=expected_statuses,
+        error_code=error_code,
     )
+    if not transitioned and document is not None:
+        raise InvalidDocumentTransitionError(
+            f"Transition from {document.processing_status!r} "
+            f"to {valid_status.value!r} is not allowed."
+        )
+    return document
 
 
 def delete_document(session: Session, document_id: UUID) -> bool:

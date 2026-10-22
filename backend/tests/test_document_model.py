@@ -8,6 +8,7 @@ from sqlalchemy import CheckConstraint, DateTime, String, Text
 
 from app.db.base import Base
 from app.models import Document
+from app.models.document import DocumentProcessingErrorCode
 
 
 def test_document_is_registered_with_shared_metadata() -> None:
@@ -25,11 +26,18 @@ def test_document_columns_have_expected_types_and_nullability() -> None:
     assert isinstance(columns.storage_path.type, Text)
     assert isinstance(columns.processing_status.type, String)
     assert columns.processing_status.type.length == 20
+    assert isinstance(columns.processing_error_code.type, String)
+    assert columns.processing_error_code.type.length == 50
+    assert columns.processing_error_code.nullable is True
     assert isinstance(columns.created_at.type, DateTime)
     assert columns.created_at.type.timezone is True
     assert isinstance(columns.updated_at.type, DateTime)
     assert columns.updated_at.type.timezone is True
-    assert all(column.nullable is False for column in columns)
+    assert all(
+        column.nullable is False
+        for column in columns
+        if column.name != "processing_error_code"
+    )
 
 
 def test_document_has_uuid_and_pending_status_defaults() -> None:
@@ -58,7 +66,15 @@ def test_document_constraints_limit_file_types_and_processing_statuses() -> None
     assert "ck_documents_processing_status" in constraints
     assert all(
         status in constraints["ck_documents_processing_status"]
-        for status in ("pending", "processing", "completed", "failed")
+        for status in ("pending", "uploaded", "processing", "completed", "failed")
+    )
+    error_constraint = " ".join(
+        constraints["ck_documents_processing_error_code"].split()
+    )
+    assert error_constraint == (
+        "processing_error_code IS NULL OR (processing_status = 'failed' "
+        f"AND processing_error_code = "
+        f"'{DocumentProcessingErrorCode.PROCESSING_FAILED.value}')"
     )
 
 

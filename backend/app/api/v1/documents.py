@@ -16,7 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.document import DocumentFileType
+from app.models.document import DocumentFileType, DocumentStatus
 from app.schemas.document import (
     DocumentCreateRequest,
     DocumentResponse,
@@ -25,6 +25,7 @@ from app.schemas.document import (
     validate_document_filename,
 )
 from app.services import document_service
+from app.services.document_service import InvalidDocumentTransitionError
 from app.services.file_storage import (
     FileStorageError,
     InvalidUploadError,
@@ -123,6 +124,7 @@ async def upload_document(
                     original_filename=filename,
                     file_type=file_type.value,
                     storage_path=storage_key,
+                    processing_status=DocumentStatus.UPLOADED,
                 )
                 response = to_document_response(document)
         except SQLAlchemyError:
@@ -176,18 +178,30 @@ def update_document_status(
     request: DocumentStatusUpdateRequest,
     session: Session = Depends(get_db),
 ) -> DocumentResponse:
-    with session.begin():
-        document = document_service.update_document_status(
-            session,
-            document_id,
-            request.status,
-        )
-        if document is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Document not found",
+    try:
+        with session.begin():
+            document = document_service.update_document_status(
+                session,
+                document_id,
+                request.status,
             )
-        response = to_document_response(document)
+            if document is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Document not found",
+                )
+            response = to_document_response(document)
+    except InvalidDocumentTransitionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Document status transition is not allowed.",
+        ) from error
+    except SQLAlchemyError:
+        logger.error("Unable to update document processing status.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to update document processing status.",
+        ) from None
     return response
 
 

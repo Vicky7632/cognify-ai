@@ -4,7 +4,7 @@
 
 Cognify AI is a standalone multimodal retrieval-augmented generation (RAG) application for learners. It is planned to accept PDF, TXT, MP3, WAV, and MP4 learning materials and provide evidence-grounded Q&A, citations, summaries, topic-wise notes, key concepts, and transcripts. Future LectureIQ integration must be through its existing Express backend. LectureIQ is separate; do not access or modify its source.
 
-The backend has a minimal FastAPI application with a health endpoint, Pydantic settings, lazy SQLAlchemy/PostgreSQL session management, an initial `Document` ORM model, and Alembic migration configuration. No frontend functionality, document API, or multimodal RAG integrations have been implemented.
+The backend has a minimal FastAPI application with a health endpoint, document metadata and multipart upload APIs, lifecycle status management, Pydantic settings, lazy SQLAlchemy/PostgreSQL session management, the `Document` ORM model, and Alembic migrations. No frontend functionality, extraction, transcription, or multimodal RAG integrations have been implemented.
 
 ## Architecture and stack direction
 
@@ -39,9 +39,9 @@ When application work begins, keep a clear separation between API/transport, ing
 
 ## Current phase and next phase
 
-**Current phase:** Week 3, Day 15. The backend includes the health endpoint, document metadata and multipart upload APIs, PostgreSQL session foundation, `Document` model, Alembic migration, document repository/service layers, and local filesystem upload storage. Document API access is unauthenticated and must remain restricted to a trusted local environment.
+**Current phase:** Week 3, Day 16. The backend includes document metadata/upload APIs and status lifecycle management. Uploaded documents start as `uploaded`; allowed transitions are `uploaded` to `processing`, `processing` to `completed` or `failed`, and `failed` to `processing` for retry. Metadata-only records retain the legacy `pending` state. Failures record only the fixed `processing_failed` code. No actual processing, background worker, or queue exists. Document API access is unauthenticated and must remain restricted to a trusted local environment.
 
-**Next planned phase:** Prepare uploaded files for document processing only in its designated roadmap phase, with suitable access controls before public exposure. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
+**Next planned phase:** Implement the first designated extraction/ingestion phase without introducing asynchronous infrastructure prematurely. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
 
 ## Open decisions
 

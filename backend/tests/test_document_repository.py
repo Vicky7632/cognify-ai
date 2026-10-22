@@ -7,7 +7,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
-from app.models.document import Document, DocumentStatus
+from app.models.document import (
+    Document,
+    DocumentProcessingErrorCode,
+    DocumentStatus,
+)
 from app.repositories.document_repository import (
     create_document,
     delete_document,
@@ -72,22 +76,56 @@ def test_list_documents_uses_newest_first_and_uuid_tie_breaker(
     assert list_documents(database_session) == [*expected_tie_order, earlier]
 
 
-@pytest.mark.parametrize("status", list(DocumentStatus))
-def test_update_document_status_accepts_supported_statuses(
+def test_update_document_status_compares_current_status_and_persists_error_code(
     database_session: Session,
-    status: DocumentStatus,
 ) -> None:
     document = create_document(
         database_session,
         original_filename="lesson.pdf",
         file_type="pdf",
         storage_path="storage/lesson.pdf",
+        processing_status=DocumentStatus.PROCESSING,
     )
 
-    updated = update_document_status(database_session, document.id, status)
+    updated, transitioned = update_document_status(
+        database_session,
+        document.id,
+        DocumentStatus.FAILED,
+        expected_statuses=(DocumentStatus.PROCESSING,),
+        error_code=DocumentProcessingErrorCode.PROCESSING_FAILED,
+    )
 
+    assert transitioned is True
     assert updated is document
-    assert document.processing_status == status.value
+    assert document.processing_status == DocumentStatus.FAILED.value
+    assert document.processing_error_code == "processing_failed"
+
+
+def test_update_document_status_clears_error_code_on_retry(
+    database_session: Session,
+) -> None:
+    document = create_document(
+        database_session,
+        original_filename="lesson.pdf",
+        file_type="pdf",
+        storage_path="storage/lesson.pdf",
+        processing_status=DocumentStatus.FAILED,
+    )
+    document.processing_error_code = DocumentProcessingErrorCode.PROCESSING_FAILED.value
+    database_session.flush()
+
+    updated, transitioned = update_document_status(
+        database_session,
+        document.id,
+        DocumentStatus.PROCESSING,
+        expected_statuses=(DocumentStatus.FAILED,),
+        error_code=None,
+    )
+
+    assert transitioned is True
+    assert updated is document
+    assert document.processing_status == DocumentStatus.PROCESSING.value
+    assert document.processing_error_code is None
 
 
 def test_delete_existing_document(database_session: Session) -> None:
@@ -113,8 +151,10 @@ def test_nonexistent_document_operations_return_consistent_results(
             database_session,
             missing_id,
             DocumentStatus.COMPLETED,
+            expected_statuses=(DocumentStatus.PROCESSING,),
+            error_code=None,
         )
-        is None
+        == (None, False)
     )
     assert delete_document(database_session, missing_id) is False
 
@@ -129,13 +169,16 @@ def test_invalid_status_is_rejected_without_changing_document(
         storage_path="storage/lesson.pdf",
     )
 
-    with pytest.raises(ValueError, match="Unsupported document status"):
-        update_document_status(
-            database_session,
-            document.id,
-            "archived",
-        )
+    updated, transitioned = update_document_status(
+        database_session,
+        document.id,
+        DocumentStatus.COMPLETED,
+        expected_statuses=(DocumentStatus.PROCESSING,),
+        error_code=None,
+    )
 
+    assert transitioned is False
+    assert updated is document
     assert document.processing_status == DocumentStatus.PENDING.value
 
 

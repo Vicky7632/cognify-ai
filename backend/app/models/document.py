@@ -10,9 +10,14 @@ from app.db.base import Base
 
 class DocumentStatus(StrEnum):
     PENDING = "pending"
+    UPLOADED = "uploaded"
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class DocumentProcessingErrorCode(StrEnum):
+    PROCESSING_FAILED = "processing_failed"
 
 
 class DocumentFileType(StrEnum):
@@ -38,6 +43,12 @@ class Document(Base):
             + ")",
             name="ck_documents_processing_status",
         ),
+        CheckConstraint(
+            "processing_error_code IS NULL OR (processing_status = 'failed' "
+            "AND processing_error_code = "
+            f"'{DocumentProcessingErrorCode.PROCESSING_FAILED.value}')",
+            name="ck_documents_processing_error_code",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -49,6 +60,10 @@ class Document(Base):
         nullable=False,
         default=DocumentStatus.PENDING.value,
         server_default=text(f"'{DocumentStatus.PENDING.value}'"),
+    )
+    processing_error_code: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

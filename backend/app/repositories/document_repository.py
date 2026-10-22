@@ -1,9 +1,9 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.models.document import Document, DocumentStatus
+from app.models.document import Document, DocumentProcessingErrorCode, DocumentStatus
 
 
 def create_document(
@@ -12,12 +12,14 @@ def create_document(
     original_filename: str,
     file_type: str,
     storage_path: str,
+    processing_status: DocumentStatus = DocumentStatus.PENDING,
 ) -> Document:
     """Add and flush a document; the caller owns the transaction."""
     document = Document(
         original_filename=original_filename,
         file_type=file_type,
         storage_path=storage_path,
+        processing_status=processing_status.value,
     )
     session.add(document)
     session.flush()
@@ -26,7 +28,12 @@ def create_document(
 
 def get_document(session: Session, document_id: UUID) -> Document | None:
     """Return a document by ID, or None if it does not exist."""
-    return session.get(Document, document_id)
+    statement = (
+        select(Document)
+        .where(Document.id == document_id)
+        .execution_options(populate_existing=True)
+    )
+    return session.scalar(statement)
 
 
 def list_documents(session: Session) -> list[Document]:
@@ -42,20 +49,29 @@ def update_document_status(
     session: Session,
     document_id: UUID,
     status: DocumentStatus | str,
-) -> Document | None:
-    """Update a supported status; the caller owns the transaction."""
-    try:
-        valid_status = DocumentStatus(status)
-    except ValueError as error:
-        raise ValueError(f"Unsupported document status: {status!r}") from error
-
-    document = session.get(Document, document_id)
-    if document is None:
-        return None
-
-    document.processing_status = valid_status.value
-    session.flush()
-    return document
+    *,
+    expected_statuses: tuple[DocumentStatus, ...],
+    error_code: DocumentProcessingErrorCode | None,
+) -> tuple[Document | None, bool]:
+    """Compare-and-set a lifecycle transition; the caller owns the transaction."""
+    valid_status = DocumentStatus(status)
+    statement = (
+        update(Document)
+        .where(
+            Document.id == document_id,
+            Document.processing_status.in_(
+                tuple(previous.value for previous in expected_statuses)
+            ),
+        )
+        .values(
+            processing_status=valid_status.value,
+            processing_error_code=error_code.value if error_code else None,
+        )
+        .execution_options(synchronize_session="fetch")
+    )
+    result = session.execute(statement)
+    document = get_document(session, document_id)
+    return document, result.rowcount == 1
 
 
 def delete_document(session: Session, document_id: UUID) -> bool:

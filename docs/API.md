@@ -40,7 +40,8 @@ Example success response (`201 Created`):
   "id": "d07962f8-c430-4b0b-b4bb-38ca63c1c083",
   "original_filename": "lecture.pdf",
   "file_type": "pdf",
-  "processing_status": "pending",
+  "processing_status": "uploaded",
+  "processing_error_code": null,
   "created_at": "2025-01-01T12:00:00Z",
   "updated_at": "2025-01-01T12:00:00Z"
 }
@@ -52,7 +53,7 @@ Files are stored under a random server-generated key, never under the client fil
 
 ### `POST /api/v1/documents`
 
-Accepts JSON with `original_filename` (1-255 characters) and `file_type` (`pdf`, `txt`, `mp3`, `wav`, or `mp4`). Returns `201 Created` with the document ID, filename, type, processing status, and timestamps. A server-generated relative pending storage key is reserved internally; this endpoint does not upload or create a file. Clients cannot provide a filesystem path.
+Accepts JSON with `original_filename` (1-255 characters) and `file_type` (`pdf`, `txt`, `mp3`, `wav`, or `mp4`). Returns `201 Created` with the document ID, filename, type, processing status, safe processing error code, and timestamps. A server-generated relative pending storage key is reserved internally; this endpoint does not upload or create a file. Such metadata-only records retain the legacy `pending` status. Clients cannot provide a filesystem path.
 
 ### `GET /api/v1/documents/{document_id}`
 
@@ -60,7 +61,27 @@ Returns document metadata with `200 OK`, or `404 Not Found` when the UUID does n
 
 ### `PATCH /api/v1/documents/{document_id}/status`
 
-Accepts JSON `{"status":"pending"}`, with status one of `pending`, `processing`, `completed`, or `failed`. Returns updated metadata with `200 OK`, `404 Not Found` for an unknown document, and `422 Unprocessable Entity` for invalid input.
+Accepts JSON with only a status field, for example `{"status":"processing"}`. Supported lifecycle statuses are `uploaded`, `processing`, `completed`, and `failed`. `pending` remains readable and can transition to `processing` for compatibility with metadata-only records.
+
+Allowed transitions are:
+
+| Current status | Allowed next status |
+|---|---|
+| `pending` | `processing` |
+| `uploaded` | `processing` |
+| `processing` | `completed`, `failed` |
+| `failed` | `processing` (retry) |
+| `completed` | none |
+
+Transitions are conditionally updated against the current database status. Repeated or disallowed transitions return `409 Conflict`; unknown IDs return `404 Not Found`; unsupported status values return `422 Unprocessable Entity`. A failure transition records only the fixed safe code `processing_failed`; exception messages and stack traces are never stored or returned. Entering `processing` on retry clears the prior code. Successful response includes `processing_error_code` (`"processing_failed"` for failed documents, otherwise `null`).
+
+```json
+{
+  "status": "failed"
+}
+```
+
+This endpoint manages lifecycle state only. No extraction, transcription, AI processing, worker, or queue is implemented in Day 16; callers must only report `completed` after the represented processing has actually succeeded.
 
 ### `DELETE /api/v1/documents/{document_id}`
 

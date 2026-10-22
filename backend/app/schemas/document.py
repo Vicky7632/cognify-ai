@@ -3,7 +3,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.document import Document, DocumentFileType, DocumentStatus
+from app.models.document import (
+    Document,
+    DocumentFileType,
+    DocumentProcessingErrorCode,
+    DocumentStatus,
+)
 
 
 class DocumentCreateRequest(BaseModel):
@@ -31,6 +36,7 @@ class DocumentResponse(BaseModel):
     original_filename: str
     file_type: DocumentFileType
     processing_status: DocumentStatus
+    processing_error_code: DocumentProcessingErrorCode | None
     created_at: datetime
     updated_at: datetime
 

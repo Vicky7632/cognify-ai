@@ -26,7 +26,12 @@ def test_document_model_is_in_alembic_target_metadata() -> None:
 
 
 def test_initial_revision_generates_only_expected_documents_ddl() -> None:
-    revision_path = next((BACKEND_ROOT / "alembic" / "versions").glob("*.py"))
+    revision_path = (
+        BACKEND_ROOT
+        / "alembic"
+        / "versions"
+        / "c5ede9494309_create_documents_table.py"
+    )
     spec = importlib.util.spec_from_file_location("initial_revision", revision_path)
     assert spec is not None
     assert spec.loader is not None
@@ -58,3 +63,74 @@ def test_initial_revision_generates_only_expected_documents_ddl() -> None:
     )
     assert "ck_documents_file_type" in sql
     assert "ck_documents_processing_status" in sql
+
+
+def test_lifecycle_revision_adds_safe_error_code_and_uploaded_status() -> None:
+    revision_path = (
+        BACKEND_ROOT
+        / "alembic"
+        / "versions"
+        / "d16a20261022_document_processing_lifecycle.py"
+    )
+    spec = importlib.util.spec_from_file_location("lifecycle_revision", revision_path)
+    assert spec is not None
+    assert spec.loader is not None
+    revision = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(revision)
+
+    output = StringIO()
+    migration_context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    with Operations.context(migration_context):
+        revision.upgrade()
+
+    sql = output.getvalue()
+    assert "ADD COLUMN processing_error_code VARCHAR(50)" in sql
+    normalized_sql = " ".join(sql.split())
+    assert (
+        "CHECK (processing_status IN "
+        "('pending', 'uploaded', 'processing', 'completed', 'failed'))"
+        in normalized_sql
+    )
+    assert (
+        "CHECK (processing_error_code IS NULL OR "
+        "(processing_status = 'failed' AND "
+        "processing_error_code = 'processing_failed'))"
+        in normalized_sql
+    )
+
+
+def test_lifecycle_downgrade_converts_uploaded_before_restoring_constraint() -> None:
+    revision_path = (
+        BACKEND_ROOT
+        / "alembic"
+        / "versions"
+        / "d16a20261022_document_processing_lifecycle.py"
+    )
+    spec = importlib.util.spec_from_file_location("lifecycle_downgrade", revision_path)
+    assert spec is not None
+    assert spec.loader is not None
+    revision = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(revision)
+
+    output = StringIO()
+    migration_context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    with Operations.context(migration_context):
+        revision.downgrade()
+
+    normalized_sql = " ".join(output.getvalue().split())
+    data_conversion = (
+        "UPDATE documents SET processing_status = 'pending' "
+        "WHERE processing_status = 'uploaded'"
+    )
+    old_constraint = (
+        "CHECK (processing_status IN "
+        "('pending', 'processing', 'completed', 'failed'))"
+    )
+    assert data_conversion in normalized_sql
+    assert normalized_sql.index(data_conversion) < normalized_sql.index(old_constraint)

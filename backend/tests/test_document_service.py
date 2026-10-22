@@ -4,8 +4,14 @@ from uuid import UUID
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.document import Document, DocumentFileType, DocumentStatus
+from app.models.document import (
+    Document,
+    DocumentFileType,
+    DocumentProcessingErrorCode,
+    DocumentStatus,
+)
 from app.services import document_service
+from app.services.document_service import InvalidDocumentTransitionError
 
 
 @pytest.fixture
@@ -34,6 +40,7 @@ def test_create_document_delegates_to_repository(
         original_filename="lecture.pdf",
         file_type="pdf",
         storage_path="storage/lecture.pdf",
+        processing_status=DocumentStatus.PENDING,
     )
 
 
@@ -85,15 +92,40 @@ def test_list_documents_delegates_to_repository(
     list_all.assert_called_once_with(session)
 
 
-@pytest.mark.parametrize("status", list(DocumentStatus))
-def test_update_document_status_accepts_supported_status(
+@pytest.mark.parametrize(
+    ("status", "expected_statuses", "error_code"),
+    [
+        (
+            DocumentStatus.PROCESSING,
+            (
+                DocumentStatus.PENDING,
+                DocumentStatus.UPLOADED,
+                DocumentStatus.FAILED,
+            ),
+            None,
+        ),
+        (
+            DocumentStatus.COMPLETED,
+            (DocumentStatus.PROCESSING,),
+            None,
+        ),
+        (
+            DocumentStatus.FAILED,
+            (DocumentStatus.PROCESSING,),
+            DocumentProcessingErrorCode.PROCESSING_FAILED,
+        ),
+    ],
+)
+def test_update_document_status_delegates_allowed_transition(
     monkeypatch: pytest.MonkeyPatch,
     session: MagicMock,
     status: DocumentStatus,
+    expected_statuses: tuple[DocumentStatus, ...],
+    error_code: DocumentProcessingErrorCode | None,
 ) -> None:
     document_id = UUID("00000000-0000-0000-0000-000000000001")
     document = MagicMock(spec=Document)
-    update = MagicMock(return_value=document)
+    update = MagicMock(return_value=(document, True))
     monkeypatch.setattr(
         document_service.document_repository,
         "update_document_status",
@@ -103,7 +135,13 @@ def test_update_document_status_accepts_supported_status(
     result = document_service.update_document_status(session, document_id, status.value)
 
     assert result is document
-    update.assert_called_once_with(session, document_id, status)
+    update.assert_called_once_with(
+        session,
+        document_id,
+        status,
+        expected_statuses=expected_statuses,
+        error_code=error_code,
+    )
 
 
 def test_update_document_status_rejects_unsupported_status(
@@ -132,7 +170,7 @@ def test_update_document_status_preserves_missing_result(
     session: MagicMock,
 ) -> None:
     document_id = UUID("00000000-0000-0000-0000-000000000001")
-    update = MagicMock(return_value=None)
+    update = MagicMock(return_value=(None, False))
     monkeypatch.setattr(
         document_service.document_repository,
         "update_document_status",
@@ -147,6 +185,26 @@ def test_update_document_status_preserves_missing_result(
         )
         is None
     )
+
+def test_update_document_status_rejects_invalid_transition(
+    monkeypatch: pytest.MonkeyPatch,
+    session: MagicMock,
+) -> None:
+    update = MagicMock()
+    monkeypatch.setattr(
+        document_service.document_repository,
+        "update_document_status",
+        update,
+    )
+
+    with pytest.raises(InvalidDocumentTransitionError):
+        document_service.update_document_status(
+            session,
+            UUID("00000000-0000-0000-0000-000000000001"),
+            DocumentStatus.PENDING,
+        )
+
+    update.assert_not_called()
 
 
 def test_delete_document_delegates_and_preserves_missing_result(

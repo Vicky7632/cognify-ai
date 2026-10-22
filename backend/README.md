@@ -2,7 +2,7 @@
 
 The backend is a standalone Python/FastAPI service using Pydantic Settings, SQLAlchemy, and PostgreSQL. Python **3.12.x** is the project target; Python 3.12.10 was available when this setup was verified. Direct runtime/test dependencies and their resolved transitive dependencies are pinned in [`requirements.txt`](requirements.txt) for repeatable pip installs. Pip manages a backend-local virtual environment; no additional dependency manager is required.
 
-The backend has a minimal FastAPI health route, document metadata API, multipart document upload, service/repository layers, a SQLAlchemy `Document` model, and Alembic-managed schema migrations. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; originals are stored under the configured local upload root.
+The backend has a minimal FastAPI health route, document metadata and lifecycle APIs, multipart document upload, service/repository layers, a SQLAlchemy `Document` model, and Alembic-managed schema migrations. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; originals are stored under the configured local upload root. Day 16 adds lifecycle state management only; document extraction and AI processing are not implemented.
 
 ## Windows PowerShell setup
 
@@ -65,7 +65,9 @@ Uploads are streamed in bounded chunks to a temporary-unique server-generated pa
 
 The existing `/api/v1/documents` routes create, list, retrieve, update status, and delete metadata only. Metadata creation does not accept a client-provided filesystem path. Response schemas exclude `storage_path`.
 
-Mutation routes own the request transaction and commit only on success; errors roll back. Repository and service methods only flush and leave transaction control to their caller. The service does not have authentication or document-level authorization. Keep it restricted to a trusted local environment; do not expose it publicly until suitable access controls are implemented.
+Uploaded documents begin in `uploaded`; metadata-only records retain `pending`. Allowed transitions are `pending` or `uploaded` to `processing`, `processing` to `completed` or `failed`, and `failed` to `processing` for retry. Completed documents are terminal. Failed processing stores only the fixed `processing_failed` error code; retry clears it. Invalid transitions return `409 Conflict`. This status API does not run processing or permit marking completion on behalf of work that has not succeeded.
+
+Mutation routes own the request transaction and commit only on success; errors roll back. Repository and service methods do not commit. Status transitions use a conditional update against the current status to prevent stale requests from overwriting a newer state. The service does not have authentication or document-level authorization. Keep it restricted to a trusted local environment; do not expose it publicly until suitable access controls are implemented.
 
 ## Database migrations
 

@@ -87,6 +87,7 @@ def test_create_document_returns_safe_metadata(client: TestClient) -> None:
     assert body["original_filename"] == "lecture.pdf"
     assert body["file_type"] == "pdf"
     assert body["processing_status"] == "pending"
+    assert body["processing_error_code"] is None
     assert "storage_path" not in body
     assert UUID(body["id"])
     assert client.app.state.transaction_events == ["commit"]
@@ -127,7 +128,8 @@ def test_upload_pdf_stores_content_and_safe_metadata(client: TestClient) -> None
     body = response.json()
     assert body["original_filename"] == "lecture.pdf"
     assert body["file_type"] == "pdf"
-    assert body["processing_status"] == "pending"
+    assert body["processing_status"] == "uploaded"
+    assert body["processing_error_code"] is None
     assert "storage_path" not in body
     files = list(client.app.state.settings.upload_root.iterdir())
     assert len(files) == 1
@@ -386,6 +388,97 @@ def test_update_status_and_delete_document(client: TestClient) -> None:
     assert client.get(f"/api/v1/documents/{document_id}").status_code == 404
 
 
+def test_upload_lifecycle_transitions_persist_safe_failure_code(
+    client: TestClient,
+) -> None:
+    uploaded = client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("lesson.pdf", b"%PDF-1.7\ncontent", "application/pdf")},
+    )
+    document_id = uploaded.json()["id"]
+    assert uploaded.json()["processing_status"] == "uploaded"
+
+    started = client.patch(
+        f"/api/v1/documents/{document_id}/status",
+        json={"status": "processing"},
+    )
+    assert started.status_code == 200
+    assert started.json()["processing_status"] == "processing"
+    assert started.json()["processing_error_code"] is None
+
+    failed = client.patch(
+        f"/api/v1/documents/{document_id}/status",
+        json={"status": "failed"},
+    )
+    assert failed.status_code == 200
+    assert failed.json()["processing_status"] == "failed"
+    assert failed.json()["processing_error_code"] == "processing_failed"
+    assert "storage_path" not in failed.json()
+    assert "exception" not in failed.text.lower()
+
+    persisted_failure = client.get(f"/api/v1/documents/{document_id}")
+    assert persisted_failure.json()["processing_error_code"] == "processing_failed"
+
+    retried = client.patch(
+        f"/api/v1/documents/{document_id}/status",
+        json={"status": "processing"},
+    )
+    assert retried.status_code == 200
+    assert retried.json()["processing_error_code"] is None
+
+    completed = client.patch(
+        f"/api/v1/documents/{document_id}/status",
+        json={"status": "completed"},
+    )
+    assert completed.status_code == 200
+    assert completed.json()["processing_status"] == "completed"
+    assert completed.json()["processing_error_code"] is None
+
+
+@pytest.mark.parametrize(
+    ("initial_status", "requested_status"),
+    [
+        ("uploaded", "completed"),
+        ("uploaded", "failed"),
+        ("processing", "processing"),
+        ("completed", "processing"),
+    ],
+)
+def test_invalid_status_transitions_return_conflict(
+    client: TestClient,
+    initial_status: str,
+    requested_status: str,
+) -> None:
+    created = client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("lesson.pdf", b"%PDF-1.7\ncontent", "application/pdf")},
+    )
+    document_id = created.json()["id"]
+    if initial_status in ("processing", "completed"):
+        started = client.patch(
+            f"/api/v1/documents/{document_id}/status",
+            json={"status": "processing"},
+        )
+        assert started.status_code == 200
+    if initial_status == "completed":
+        finished = client.patch(
+            f"/api/v1/documents/{document_id}/status",
+            json={"status": "completed"},
+        )
+        assert finished.status_code == 200
+
+    before = client.get(f"/api/v1/documents/{document_id}").json()
+    response = client.patch(
+        f"/api/v1/documents/{document_id}/status",
+        json={"status": requested_status},
+    )
+
+    assert response.status_code == 409
+    after = client.get(f"/api/v1/documents/{document_id}").json()
+    assert after["processing_status"] == before["processing_status"]
+    assert after["processing_error_code"] == before["processing_error_code"]
+
+
 def test_invalid_file_type_and_status_return_422(client: TestClient) -> None:
     invalid_file = client.post(
         "/api/v1/documents",
@@ -497,6 +590,12 @@ def test_database_operation_failure_rolls_back_and_hides_details(
             "00000000-0000-0000-0000-000000000001",
             document_id,
         )
+        if operation == "UPDATE":
+            started = client.patch(
+                f"/api/v1/documents/{document_id}/status",
+                json={"status": "processing"},
+            )
+            assert started.status_code == 200
         client.app.state.transaction_events.clear()
 
     client.app.state.failing_statements.add(operation)
@@ -514,7 +613,13 @@ def test_database_operation_failure_rolls_back_and_hides_details(
             client.get(f"/api/v1/documents/{document_id}").json()[
                 "processing_status"
             ]
-            == "pending"
+            == "processing"
+        )
+        assert (
+            client.get(f"/api/v1/documents/{document_id}").json()[
+                "processing_error_code"
+            ]
+            is None
         )
     else:
         assert client.get(f"/api/v1/documents/{document_id}").status_code == 200
