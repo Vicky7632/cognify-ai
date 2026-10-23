@@ -1,6 +1,6 @@
 # Roadmap
 
-The roadmap is ordered by dependency. Each phase has a small acceptance gate and depends on the previous phase. Implemented work includes the backend foundation, PostgreSQL document metadata/lifecycle, local upload handling, and the Day 17 processor contract/orchestration foundation. The statuses below distinguish those implemented parts from remaining work.
+The roadmap is ordered by dependency. Each phase has a small acceptance gate and depends on the previous phase. Implemented work includes the backend foundation, PostgreSQL document metadata/lifecycle, local upload handling, the Day 17 processor contract/orchestration foundation, and Day 18 PDF/TXT extraction. The statuses below distinguish those implemented parts from remaining work.
 
 ## 1. Repository and documentation foundation
 
@@ -22,8 +22,9 @@ The roadmap is ordered by dependency. Each phase has a small acceptance gate and
 
 ## 4. File upload and extraction
 
-- **Implemented:** safe local filesystem storage, upload validation, size limits, and the Day 17 synchronous processor contract/orchestration. No concrete processor or extractor is wired yet.
-- **Next (Day 18):** implement PDF/TXT extraction with source identity and PDF page metadata behind the processor contract.
+- **Implemented:** safe local filesystem storage and upload validation; synchronous processor contract/orchestration; PDF page-by-page text extraction with 1-based page provenance; strict UTF-8 TXT decoding with optional BOM support.
+- Extracted segments are currently returned in memory, not persisted. The processor/orchestrator are not exposed through an API.
+- **Next (Day 19):** decide whether extracted segments need relational persistence now or should remain in memory until a later ingestion/indexing design.
 - **Acceptance:** tests cover supported and unsupported types, size limits, malformed/empty files, extraction, provenance, storage failure, and cleanup.
 
 ## 5. Audio/video transcription

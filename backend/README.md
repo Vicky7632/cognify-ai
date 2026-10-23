@@ -2,7 +2,7 @@
 
 The backend is a standalone Python/FastAPI service using Pydantic Settings, SQLAlchemy, and PostgreSQL. Python **3.12.x** is the project target; Python 3.12.10 was available when this setup was verified. Direct runtime/test dependencies and their resolved transitive dependencies are pinned in [`requirements.txt`](requirements.txt) for repeatable pip installs. Pip manages a backend-local virtual environment; no additional dependency manager is required.
 
-The backend has a minimal FastAPI health route, document metadata and lifecycle APIs, multipart document upload, service/repository layers, a SQLAlchemy `Document` model, and Alembic-managed schema migrations. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; originals are stored under the configured local upload root. Day 16 adds lifecycle state management only; document extraction and AI processing are not implemented.
+The backend has a minimal FastAPI health route, document metadata and lifecycle APIs, multipart document upload, synchronous processing foundations, and local PDF/TXT extraction. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; originals are stored under the configured local upload root. Extracted segments remain in memory; media transcription and AI processing are not implemented.
 
 ## Windows PowerShell setup
 
@@ -41,7 +41,7 @@ python -m uvicorn app.main:app --reload
 
 The health check is available at `http://127.0.0.1:8000/api/v1/health`; FastAPI's interactive API documentation remains available at `http://127.0.0.1:8000/docs`.
 
-The current tests cover settings behavior, lazy database/session behavior, `Document` model metadata, repository and service operations, upload/storage failures, lifecycle logging, and API behavior. Database tests use isolated SQLite and do not require a live PostgreSQL server.
+The current tests cover settings behavior, lazy database/session behavior, `Document` model metadata, repository and service operations, upload/storage failures, PDF/TXT extraction and failure cases, lifecycle logging, and API behavior. Database tests use isolated SQLite and do not require a live PostgreSQL server.
 
 The document repository uses the session supplied by its caller and does not commit or roll back. Callers own transaction boundaries. Unit tests exercise repository operations against an isolated in-memory SQLite database and do not require PostgreSQL.
 
@@ -73,7 +73,7 @@ Mutation routes own the request transaction and commit only on success; errors r
 
 `app/services/document_processor.py` defines a synchronous processor protocol and immutable structured result segments with optional page or media-time provenance. The processor contract accepts no FastAPI request or database session objects. `app/services/document_processing_service.py` coordinates one injected processor: it claims `processing` in a short transaction, runs the processor without holding a database transaction, then conditionally records completion or a safe failure status. Stale transitions are rejected through the existing compare-and-set lifecycle service.
 
-There is no concrete processor, extraction/transcription implementation, persistence for processor result segments, or public processing endpoint yet. The orchestration is an internal foundation only; it does not fabricate successful results. Day 18 should implement PDF/TXT extraction behind this contract and decide how normalized segments are persisted.
+The local processor extracts PDF text page by page with 1-based page provenance and decodes TXT as strict UTF-8 with optional BOM support. It resolves only generated storage keys beneath the configured upload root. Missing, unreadable, malformed, unsupported, or empty inputs fail with the existing safe `processing_failed` code. Results are not persisted, and neither processor nor orchestrator is exposed through an API. Day 19 should decide how extracted segments and provenance should be persisted.
 
 ## Database migrations
 

@@ -1,6 +1,6 @@
 # Data flow
 
-> **Status:** Upload, document persistence, and lifecycle status management are implemented. Day 17 adds an internal synchronous processor contract/orchestrator, but no concrete extractor, transcription implementation, or processing endpoint is wired. The extraction stages shown remain proposed.
+> **Status:** Upload, document persistence, lifecycle management, an internal synchronous processor/orchestrator, and local PDF/TXT extraction are implemented. The processing path is not exposed by an HTTP endpoint, and extracted segments are not persisted. Audio/video transcription and downstream indexing remain proposed.
 
 ## Ingestion
 
@@ -15,25 +15,20 @@ flowchart TD
     State --> Orchestrator[Internal synchronous orchestration]
     Orchestrator --> Claim[Conditional transition to processing]
     Claim --> Processor[Injected processor contract]
-    Processor -->|Valid structured result| InternalComplete[Conditional transition to completed]
-    Processor -->|Expected or unexpected failure| InternalFailed[Record safe failure code]
-    Processor -. Day 17: no concrete implementation .-> Route{Future source-specific extraction}
-    Route -->|PDF| PDF[Extract text with page references]
-    Route -->|TXT| TXT[Decode and extract text]
-    Route -->|MP3 / WAV| Audio[Local Whisper-compatible transcription]
-    Route -->|MP4| ExtractAudio[FFmpeg extracts audio]
-    ExtractAudio --> Audio
-    PDF --> Normalize[Normalize text, source identity, and locations]
+    Processor -->|PDF| PDF[Extract each non-empty page with 1-based page number]
+    Processor -->|TXT| TXT[Strict UTF-8 decode with optional BOM]
+    Processor -->|Unsupported, empty, or failed| InternalFailed[Record safe failure code]
+    PDF --> Normalize[Return non-empty segments in memory with provenance]
     TXT --> Normalize
-    Audio --> Normalize
-    Normalize --> Nonempty{Usable extracted content?}
-    Nonempty -->|No| ExtractionFailure[Explicit extraction/transcription error]
-    Nonempty -->|Yes| Chunk[Chunk content and retain provenance]
+    Normalize --> InternalComplete[Conditional transition to completed]
+    Processor -. Future: MP3 / WAV .-> Audio[Local Whisper-compatible transcription]
+    Processor -. Future: MP4 .-> ExtractAudio[FFmpeg extracts audio]
+    ExtractAudio -. Future .-> Audio
+    Normalize -. Future ingestion .-> Chunk[Chunk content and retain provenance]
     Chunk --> Embed[Create embeddings]
     Embed --> Persist[Pinecone vector upsert]
-    Persist --> CompletedWithIndex[Record completion after successful processing]
-    CompletedWithIndex --> Result[Return ingestion status and source identifier]
-    ExtractionFailure --> InternalFailed
+    Persist --> CompletedWithIndex[Future: record completion after indexing]
+    CompletedWithIndex --> Result[Future ingestion status and source identifier]
     InternalComplete --> Result[Internal processing outcome]
     InternalFailed --> Result
     CompletedWithIndex --> Result
@@ -43,10 +38,10 @@ flowchart TD
 
 1. Validate supported formats (PDF, TXT, MP3, WAV, MP4), actual content where practical, and configured size limits; do not trust only filename or client MIME type.
 2. Create document/processing metadata in PostgreSQL and persist the original through the separate file storage abstraction.
-3. Extract PDF/TXT directly. Transcribe MP3/WAV with a selected local model; use FFmpeg to extract MP4 audio first. Timestamp availability depends on the implementation.
+3. PDF/TXT extraction is implemented by the local processor: PDF output is page-separated with 1-based provenance, and TXT uses strict UTF-8 decoding with optional BOM support. Transcribing MP3/WAV with a selected local model and using FFmpeg to extract MP4 audio remain future work.
 4. Normalize output into a shared representation, retain source ID/type/location, and chunk while preserving page/time ranges where available.
 5. Generate embeddings through an abstraction and upsert vectors plus minimal searchable metadata into Pinecone. Keep relational state in PostgreSQL and originals in file storage.
-6. Make retry, partial failure, cleanup, idempotency, and cross-store consistency explicit. Do not silently index empty content or claim full success when a required step failed.
+6. Extracted segments are currently in-memory only; no endpoint invokes the processor. Before wiring ingestion, define result persistence and make retry, partial failure, cleanup, idempotency, and cross-store consistency explicit. Do not silently index empty content or claim full success when a required step failed.
 
 Temporary-file lifecycle, deduplication, idempotency, and retry behavior must be defined during implementation.
 

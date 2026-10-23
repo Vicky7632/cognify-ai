@@ -81,11 +81,11 @@ Transitions are conditionally updated against the current database status. Repea
 }
 ```
 
-This endpoint manages lifecycle state only. No extraction, transcription, AI processing, worker, or queue is implemented in Day 16; callers must only report `completed` after the represented processing has actually succeeded.
+This endpoint manages lifecycle state only. It does not invoke extraction, transcription, AI processing, workers, or queues; callers must only report `completed` after the represented processing has actually succeeded.
 
 ### Processing service status
 
-Day 17 adds an internal synchronous processor contract and orchestration service, not a new HTTP endpoint. No concrete processor is wired, and the existing status route does not invoke processing. A completed status must only be recorded after a future real processor returns a valid non-empty result.
+Day 17 added an internal synchronous processor contract and orchestration service; Day 18 added a local PDF/TXT processor. PDF extraction creates one segment per non-empty page with 1-based page numbers. TXT decoding is strict UTF-8 with optional BOM support. Storage access uses the validated server-generated storage key under the configured upload root. Empty extraction and unsupported, missing, malformed, or unreadable inputs fail with the existing safe `processing_failed` code. Results remain in memory; there is no public processing endpoint, extracted-text persistence, transcription, worker, or queue. The lifecycle status endpoint does not invoke the processor.
 
 ### `DELETE /api/v1/documents/{document_id}`
 
