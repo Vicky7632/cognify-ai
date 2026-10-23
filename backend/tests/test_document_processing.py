@@ -4,7 +4,8 @@ from typing import cast
 from uuid import UUID
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -15,11 +16,14 @@ from app.models.document import (
     DocumentProcessingErrorCode,
     DocumentStatus,
 )
+from app.models.document_segment import DocumentSegment
+from app.repositories import document_segment_repository
 from app.services import document_service
 from app.services.document_processing_service import (
     DocumentNotFoundError,
     DocumentProcessingConflictError,
     DocumentProcessingFailedError,
+    DocumentProcessingPersistenceError,
     process_document,
 )
 from app.services.document_processor import (
@@ -51,14 +55,15 @@ def create_document(
     *,
     status: DocumentStatus = DocumentStatus.UPLOADED,
     error_code: DocumentProcessingErrorCode | None = None,
+    file_type: DocumentFileType = DocumentFileType.PDF,
 ) -> UUID:
     with session_factory() as session:
         with session.begin():
             document = document_service.create_document(
                 session,
                 original_filename="lesson.pdf",
-                file_type=DocumentFileType.PDF,
-                storage_path="random-storage-key.pdf",
+                file_type=file_type,
+                storage_path=f"random-storage-key.{file_type.value}",
                 processing_status=status,
             )
             document.processing_error_code = (
@@ -109,7 +114,12 @@ def test_processor_contract_completes_only_with_valid_result(
     session_factory: sessionmaker[Session],
 ) -> None:
     document_id = create_document(session_factory)
-    result = ProcessingResult(segments=(ProcessedSegment("Processed text"),))
+    result = ProcessingResult(
+        segments=(
+            ProcessedSegment("Later page", page_number=3),
+            ProcessedSegment("Earlier page", page_number=1),
+        )
+    )
     processor = ReturningProcessor(result)
 
     returned = process_document(session_factory, document_id, processor)
@@ -121,6 +131,110 @@ def test_processor_contract_completes_only_with_valid_result(
     document = get_document(session_factory, document_id)
     assert document.processing_status == DocumentStatus.COMPLETED.value
     assert document.processing_error_code is None
+    with session_factory() as session:
+        segments = session.scalars(
+            select(DocumentSegment)
+            .where(DocumentSegment.document_id == document_id)
+            .order_by(DocumentSegment.ordinal)
+        ).all()
+    assert [
+        (segment.ordinal, segment.text_content, segment.page_number)
+        for segment in segments
+    ] == [
+        (0, "Later page", 3),
+        (1, "Earlier page", 1),
+    ]
+
+
+def test_processor_runs_without_an_open_database_transaction(
+    session_factory: sessionmaker[Session],
+) -> None:
+    document_id = create_document(session_factory)
+    engine = session_factory.kw["bind"]
+    assert engine is not None
+    active_transactions = 0
+
+    def transaction_started(_connection) -> None:
+        nonlocal active_transactions
+        active_transactions += 1
+
+    def transaction_ended(_connection) -> None:
+        nonlocal active_transactions
+        active_transactions -= 1
+
+    event.listen(engine, "begin", transaction_started)
+    event.listen(engine, "commit", transaction_ended)
+    event.listen(engine, "rollback", transaction_ended)
+
+    class TransactionCheckingProcessor:
+        def process(self, document: DocumentProcessingInput) -> ProcessingResult:
+            assert active_transactions == 0
+            return ProcessingResult(
+                segments=(ProcessedSegment("Processed text", page_number=1),)
+            )
+
+    try:
+        process_document(
+            session_factory,
+            document_id,
+            TransactionCheckingProcessor(),
+        )
+    finally:
+        event.remove(engine, "begin", transaction_started)
+        event.remove(engine, "commit", transaction_ended)
+        event.remove(engine, "rollback", transaction_ended)
+
+    assert active_transactions == 0
+
+
+def test_txt_segments_persist_without_source_locations(
+    session_factory: sessionmaker[Session],
+) -> None:
+    document_id = create_document(
+        session_factory,
+        file_type=DocumentFileType.TXT,
+    )
+    result = ProcessingResult(
+        segments=(
+            ProcessedSegment("First text segment"),
+            ProcessedSegment("Second text segment"),
+        )
+    )
+
+    process_document(session_factory, document_id, ReturningProcessor(result))
+
+    with session_factory() as session:
+        segments = session.scalars(
+            select(DocumentSegment)
+            .where(DocumentSegment.document_id == document_id)
+            .order_by(DocumentSegment.ordinal)
+        ).all()
+    assert [(segment.ordinal, segment.page_number) for segment in segments] == [
+        (0, None),
+        (1, None),
+    ]
+    assert all(
+        segment.start_seconds is None and segment.end_seconds is None
+        for segment in segments
+    )
+
+
+def test_invalid_pdf_provenance_fails_without_persisting_segments(
+    session_factory: sessionmaker[Session],
+) -> None:
+    document_id = create_document(session_factory)
+    processor = ReturningProcessor(
+        ProcessingResult(segments=(ProcessedSegment("Missing page reference"),))
+    )
+
+    with pytest.raises(DocumentProcessingFailedError):
+        process_document(session_factory, document_id, processor)
+
+    document = get_document(session_factory, document_id)
+    assert document.processing_status == DocumentStatus.FAILED.value
+    assert document.processing_error_code == "processing_failed"
+    with session_factory() as session:
+        assert session.scalars(select(DocumentSegment)).all() == []
 
 
 def test_expected_processor_failure_is_persisted_with_safe_code(
@@ -142,6 +256,8 @@ def test_expected_processor_failure_is_persisted_with_safe_code(
     document = get_document(session_factory, document_id)
     assert document.processing_status == DocumentStatus.FAILED.value
     assert document.processing_error_code == "processing_failed"
+    with session_factory() as session:
+        assert session.scalars(select(DocumentSegment)).all() == []
 
 
 def test_unexpected_processor_exception_is_sanitized_and_marks_failed(
@@ -160,6 +276,8 @@ def test_unexpected_processor_exception_is_sanitized_and_marks_failed(
     assert sensitive_detail not in str(raised.value)
     document = get_document(session_factory, document_id)
     assert document.processing_status == DocumentStatus.FAILED.value
+    with session_factory() as session:
+        assert session.scalars(select(DocumentSegment)).all() == []
     assert document.processing_error_code == "processing_failed"
 
 
@@ -209,7 +327,9 @@ def test_ineligible_lifecycle_state_is_rejected(
         status=DocumentStatus.COMPLETED,
     )
     processor = ReturningProcessor(
-        ProcessingResult(segments=(ProcessedSegment("Processed text"),))
+        ProcessingResult(
+            segments=(ProcessedSegment("Processed text", page_number=1),)
+        )
     )
 
     with pytest.raises(DocumentProcessingConflictError):
@@ -228,7 +348,9 @@ def test_failed_document_can_be_retried_and_old_error_is_cleared(
         error_code=DocumentProcessingErrorCode.PROCESSING_FAILED,
     )
     processor = ReturningProcessor(
-        ProcessingResult(segments=(ProcessedSegment("Retried text"),))
+        ProcessingResult(
+            segments=(ProcessedSegment("Retried text", page_number=1),)
+        )
     )
 
     process_document(session_factory, document_id, processor)
@@ -236,13 +358,22 @@ def test_failed_document_can_be_retried_and_old_error_is_cleared(
     document = get_document(session_factory, document_id)
     assert document.processing_status == DocumentStatus.COMPLETED.value
     assert document.processing_error_code is None
+    with session_factory() as session:
+        segments = session.scalars(
+            select(DocumentSegment).where(DocumentSegment.document_id == document_id)
+        ).all()
+    assert [(segment.ordinal, segment.text_content) for segment in segments] == [
+        (0, "Retried text")
+    ]
 
 
 def test_stale_completion_does_not_overwrite_newer_failure(
     session_factory: sessionmaker[Session],
 ) -> None:
     document_id = create_document(session_factory)
-    result = ProcessingResult(segments=(ProcessedSegment("Processed text"),))
+    result = ProcessingResult(
+        segments=(ProcessedSegment("Processed text", page_number=1),)
+    )
 
     class ConcurrentFailureProcessor:
         def process(self, document: DocumentProcessingInput) -> ProcessingResult:
@@ -261,3 +392,50 @@ def test_stale_completion_does_not_overwrite_newer_failure(
     document = get_document(session_factory, document_id)
     assert document.processing_status == DocumentStatus.FAILED.value
     assert document.processing_error_code == "processing_failed"
+    with session_factory() as session:
+        assert session.scalars(select(DocumentSegment)).all() == []
+
+
+def test_segment_persistence_failure_rolls_back_completion_and_partial_rows(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = create_document(session_factory)
+    result = ProcessingResult(
+        segments=(
+            ProcessedSegment("First persisted row", page_number=1),
+            ProcessedSegment("Second persisted row", page_number=2),
+        )
+    )
+    replace_segments = document_segment_repository.replace_document_segments
+
+    def fail_after_first_segment(
+        session: Session,
+        target_document_id: UUID,
+        segments: tuple[DocumentSegment, ...],
+    ) -> None:
+        replace_segments(session, target_document_id, segments[:1])
+        session.add(
+            DocumentSegment(
+                document_id=target_document_id,
+                ordinal=1,
+                text_content=" \t ",
+                page_number=2,
+            )
+        )
+        session.flush()
+
+    monkeypatch.setattr(
+        document_segment_repository,
+        "replace_document_segments",
+        fail_after_first_segment,
+    )
+
+    with pytest.raises(DocumentProcessingPersistenceError):
+        process_document(session_factory, document_id, ReturningProcessor(result))
+
+    document = get_document(session_factory, document_id)
+    assert document.processing_status == DocumentStatus.PROCESSING.value
+    assert document.processing_error_code is None
+    with session_factory() as session:
+        assert session.scalars(select(DocumentSegment)).all() == []

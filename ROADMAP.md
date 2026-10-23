@@ -23,8 +23,8 @@ The roadmap is ordered by dependency. Each phase has a small acceptance gate and
 ## 4. File upload and extraction
 
 - **Implemented:** safe local filesystem storage and upload validation; synchronous processor contract/orchestration; PDF page-by-page text extraction with 1-based page provenance; strict UTF-8 TXT decoding with optional BOM support.
-- Extracted segments are currently returned in memory, not persisted. The processor/orchestrator are not exposed through an API.
-- **Next (Day 19):** decide whether extracted segments need relational persistence now or should remain in memory until a later ingestion/indexing design.
+- **Implemented (Day 20 Step 3):** processing persists extracted segments with zero-based ordinal and source provenance, then commits document completion in the same transaction. Extraction runs outside database transactions; persistence failures roll back both rows and completion. The processor/orchestrator are not exposed through an API.
+- The `document_segments` schema is managed by the reviewed Alembic revision and must be applied to a target database before persistence is used.
 - **Acceptance:** tests cover supported and unsupported types, size limits, malformed/empty files, extraction, provenance, storage failure, and cleanup.
 
 ## 5. Audio/video transcription

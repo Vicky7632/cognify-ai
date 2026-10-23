@@ -85,7 +85,7 @@ This endpoint manages lifecycle state only. It does not invoke extraction, trans
 
 ### Processing service status
 
-Day 17 added an internal synchronous processor contract and orchestration service; Day 18 added a local PDF/TXT processor. PDF extraction creates one segment per non-empty page with 1-based page numbers. TXT decoding is strict UTF-8 with optional BOM support. Storage access uses the validated server-generated storage key under the configured upload root. Empty extraction and unsupported, missing, malformed, or unreadable inputs fail with the existing safe `processing_failed` code. Results remain in memory; there is no public processing endpoint, extracted-text persistence, transcription, worker, or queue. The lifecycle status endpoint does not invoke the processor.
+Day 17 added an internal synchronous processor contract and orchestration service; Day 18 added a local PDF/TXT processor; Day 20 Step 3 persists extracted segments. PDF extraction creates one segment per non-empty page with 1-based page numbers. TXT decoding is strict UTF-8 with optional BOM support. Storage access uses the validated server-generated storage key under the configured upload root. Empty extraction and unsupported, missing, malformed, or unreadable inputs fail with the existing safe `processing_failed` code. The service persists ordered segments and marks completion in one transaction after extraction finishes. There is no public processing endpoint, transcription, worker, or queue; the lifecycle status endpoint does not invoke the processor. Apply the document-segment Alembic revision before using persistence against a database.
 
 ### `DELETE /api/v1/documents/{document_id}`
 

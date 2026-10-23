@@ -4,7 +4,7 @@
 
 Cognify AI is a standalone multimodal retrieval-augmented generation (RAG) application for learners. It is planned to accept PDF, TXT, MP3, WAV, and MP4 learning materials and provide evidence-grounded Q&A, citations, summaries, topic-wise notes, key concepts, and transcripts. Future LectureIQ integration must be through its existing Express backend. LectureIQ is separate; do not access or modify its source.
 
-The backend has a minimal FastAPI application with a health endpoint, document metadata and multipart upload APIs, lifecycle status management, a synchronous processor contract/orchestration foundation, and a local PDF/TXT extractor. Extracted segments are returned in memory and are not persisted or exposed through an API. No frontend functionality, media transcription, or multimodal RAG integrations have been implemented.
+The backend has a minimal FastAPI application with a health endpoint, document metadata and multipart upload APIs, lifecycle status management, a synchronous processor contract/orchestration foundation, and a local PDF/TXT extractor. Extracted segments are persisted in PostgreSQL by the internal processing service and are not exposed through an API. No frontend functionality, media transcription, or multimodal RAG integrations have been implemented.
 
 ## Architecture and stack direction
 
@@ -39,9 +39,9 @@ When application work begins, keep a clear separation between API/transport, ing
 
 ## Current phase and next phase
 
-**Current phase:** Week 3, Day 18. The backend includes a `pypdf`-based local PDF/TXT processor implementing the typed synchronous contract. PDF text remains separated by 1-based source page; TXT uses strict UTF-8 decoding with optional BOM. Empty/unreadable/malformed/unsupported inputs fail with the existing safe processing error code. The processor and orchestrator are not wired to a public endpoint; output segments are in-memory only. There is no transcription, background worker, or queue. Uploaded documents start as `uploaded`; metadata-only records retain legacy `pending`. Document API access is unauthenticated and must remain restricted to a trusted local environment.
+**Current phase:** Week 3, Day 20 Step 3. The backend includes a `pypdf`-based local PDF/TXT processor implementing the typed synchronous contract. PDF text remains separated by 1-based source page; TXT uses strict UTF-8 decoding with optional BOM. Extracted segments persist in ordinal order in PostgreSQL, and completion is committed atomically with segment persistence. Empty/unreadable/malformed/unsupported inputs fail with the existing safe processing error code. The processor and orchestrator are not wired to a public endpoint. There is no transcription, background worker, or queue. The document-segment Alembic revision must be applied before using persistence against a database. Uploaded documents start as `uploaded`; metadata-only records retain legacy `pending`. Document API access is unauthenticated and must remain restricted to a trusted local environment.
 
-**Next planned phase (Day 19):** Decide and implement a reviewed persistence design for extracted segments and provenance, or keep them in-memory until an ingestion/indexing phase defines their lifecycle. Do not add chunking, embeddings, vector storage, transcription, or asynchronous infrastructure without a designated phase. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
+**Next planned phase:** Await review of the Day 20 Step 3 repository and processing-service integration before continuing. Do not add chunking, embeddings, vector storage, transcription, or asynchronous infrastructure without a designated phase. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
 
 ## Open decisions
 

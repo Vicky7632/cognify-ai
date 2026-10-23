@@ -10,6 +10,8 @@ from app.models.document import (
     DocumentProcessingErrorCode,
     DocumentStatus,
 )
+from app.models.document_segment import DocumentSegment
+from app.repositories import document_segment_repository
 from app.services import document_service
 from app.services.document_processor import (
     DocumentProcessingError,
@@ -80,6 +82,7 @@ def process_document(
         result = processor.process(processing_input)
         if not isinstance(result, ProcessingResult):
             raise TypeError("Processor returned an invalid result.")
+        segments = _document_segments(processing_input, result)
     except DocumentProcessingError as error:
         _record_processing_failure(
             session_factory,
@@ -108,6 +111,11 @@ def process_document(
                 )
                 if document is None:
                     raise DocumentNotFoundError("Document not found.")
+                document_segment_repository.replace_document_segments(
+                    session,
+                    document_id,
+                    segments,
+                )
     except InvalidDocumentTransitionError as error:
         raise DocumentProcessingConflictError() from error
     except SQLAlchemyError:
@@ -115,6 +123,39 @@ def process_document(
         raise DocumentProcessingPersistenceError() from None
 
     return result
+
+
+def _document_segments(
+    processing_input: DocumentProcessingInput,
+    result: ProcessingResult,
+) -> tuple[DocumentSegment, ...]:
+    persisted_segments: list[DocumentSegment] = []
+    for ordinal, segment in enumerate(result.segments):
+        if processing_input.file_type is DocumentFileType.PDF:
+            if (
+                segment.page_number is None
+                or segment.start_seconds is not None
+                or segment.end_seconds is not None
+            ):
+                raise ValueError("PDF segment provenance is invalid.")
+        elif processing_input.file_type is DocumentFileType.TXT and (
+            segment.page_number is not None
+            or segment.start_seconds is not None
+            or segment.end_seconds is not None
+        ):
+            raise ValueError("TXT segment provenance is invalid.")
+
+        persisted_segments.append(
+            DocumentSegment(
+                document_id=processing_input.document_id,
+                ordinal=ordinal,
+                text_content=segment.text,
+                page_number=segment.page_number,
+                start_seconds=segment.start_seconds,
+                end_seconds=segment.end_seconds,
+            )
+        )
+    return tuple(persisted_segments)
 
 
 def _record_processing_failure(

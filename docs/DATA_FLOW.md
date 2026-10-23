@@ -1,6 +1,6 @@
 # Data flow
 
-> **Status:** Upload, document persistence, lifecycle management, an internal synchronous processor/orchestrator, and local PDF/TXT extraction are implemented. The processing path is not exposed by an HTTP endpoint, and extracted segments are not persisted. Audio/video transcription and downstream indexing remain proposed.
+> **Status:** Upload, document persistence, lifecycle management, an internal synchronous processor/orchestrator, local PDF/TXT extraction, and extracted-segment persistence are implemented. Extraction runs outside transactions; segment persistence and completion share one transaction. The processing path is not exposed by an HTTP endpoint. Audio/video transcription and downstream indexing remain proposed.
 
 ## Ingestion
 
@@ -18,9 +18,10 @@ flowchart TD
     Processor -->|PDF| PDF[Extract each non-empty page with 1-based page number]
     Processor -->|TXT| TXT[Strict UTF-8 decode with optional BOM]
     Processor -->|Unsupported, empty, or failed| InternalFailed[Record safe failure code]
-    PDF --> Normalize[Return non-empty segments in memory with provenance]
+    PDF --> Normalize[Prepare ordered segments with page provenance]
     TXT --> Normalize
-    Normalize --> InternalComplete[Conditional transition to completed]
+    Normalize --> PersistSegments[Persist ordered segments]
+    PersistSegments --> InternalComplete[Atomically commit segments and completed status]
     Processor -. Future: MP3 / WAV .-> Audio[Local Whisper-compatible transcription]
     Processor -. Future: MP4 .-> ExtractAudio[FFmpeg extracts audio]
     ExtractAudio -. Future .-> Audio
@@ -41,7 +42,7 @@ flowchart TD
 3. PDF/TXT extraction is implemented by the local processor: PDF output is page-separated with 1-based provenance, and TXT uses strict UTF-8 decoding with optional BOM support. Transcribing MP3/WAV with a selected local model and using FFmpeg to extract MP4 audio remain future work.
 4. Normalize output into a shared representation, retain source ID/type/location, and chunk while preserving page/time ranges where available.
 5. Generate embeddings through an abstraction and upsert vectors plus minimal searchable metadata into Pinecone. Keep relational state in PostgreSQL and originals in file storage.
-6. Extracted segments are currently in-memory only; no endpoint invokes the processor. Before wiring ingestion, define result persistence and make retry, partial failure, cleanup, idempotency, and cross-store consistency explicit. Do not silently index empty content or claim full success when a required step failed.
+6. The internal processor persists extracted segments in PostgreSQL; no endpoint invokes it. Persistence and completion commit atomically after extraction. Continue to make retry, partial failure, cleanup, idempotency, and cross-store consistency explicit before adding indexing. Do not silently index empty content or claim full success when a required step failed.
 
 Temporary-file lifecycle, deduplication, idempotency, and retry behavior must be defined during implementation.
 
