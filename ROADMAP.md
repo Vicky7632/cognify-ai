@@ -1,6 +1,6 @@
 # Roadmap
 
-The roadmap is ordered by dependency. Each phase has a small acceptance gate and depends on the previous phase. Nothing below is implemented yet; this repository is currently a documentation and structure baseline.
+The roadmap is ordered by dependency. Each phase has a small acceptance gate and depends on the previous phase. Implemented work includes the backend foundation, PostgreSQL document metadata/lifecycle, local upload handling, and the Day 17 processor contract/orchestration foundation. The statuses below distinguish those implemented parts from remaining work.
 
 ## 1. Repository and documentation foundation
 
@@ -16,14 +16,14 @@ The roadmap is ordered by dependency. Each phase has a small acceptance gate and
 
 ## 3. PostgreSQL integration and document metadata
 
-- Select the local PostgreSQL development workflow and SQLAlchemy conventions.
-- Add relational document and processing metadata models and migrations when approved.
-- **Acceptance:** tests cover persistence, status/error transitions, and database unavailable behavior. Keep vectors and original files outside the relational responsibility boundary.
+- **Implemented:** SQLAlchemy document metadata, PostgreSQL session setup, Alembic-managed status/error schema, repository/service/API layers, and lifecycle transition tests.
+- Keep future relational changes in reviewed Alembic migrations. Keep vectors and original files outside PostgreSQL's relational responsibility boundary.
+- **Acceptance:** tests cover persistence, status/error transitions, and database unavailable behavior. Existing backend tests cover persistence and lifecycle behavior.
 
 ## 4. File upload and extraction
 
-- Add a file storage abstraction with a safe local filesystem implementation and upload validation.
-- Support PDF/TXT extraction with source identity and PDF page metadata.
+- **Implemented:** safe local filesystem storage, upload validation, size limits, and the Day 17 synchronous processor contract/orchestration. No concrete processor or extractor is wired yet.
+- **Next (Day 18):** implement PDF/TXT extraction with source identity and PDF page metadata behind the processor contract.
 - **Acceptance:** tests cover supported and unsupported types, size limits, malformed/empty files, extraction, provenance, storage failure, and cleanup.
 
 ## 5. Audio/video transcription

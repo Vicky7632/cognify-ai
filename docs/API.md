@@ -83,6 +83,10 @@ Transitions are conditionally updated against the current database status. Repea
 
 This endpoint manages lifecycle state only. No extraction, transcription, AI processing, worker, or queue is implemented in Day 16; callers must only report `completed` after the represented processing has actually succeeded.
 
+### Processing service status
+
+Day 17 adds an internal synchronous processor contract and orchestration service, not a new HTTP endpoint. No concrete processor is wired, and the existing status route does not invoke processing. A completed status must only be recorded after a future real processor returns a valid non-empty result.
+
 ### `DELETE /api/v1/documents/{document_id}`
 
 Deletes the metadata record only and returns `204 No Content`, or `404 Not Found` if it does not exist. Original files and vectors are not managed by this endpoint.

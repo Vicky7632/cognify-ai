@@ -69,6 +69,12 @@ Uploaded documents begin in `uploaded`; metadata-only records retain `pending`. 
 
 Mutation routes own the request transaction and commit only on success; errors roll back. Repository and service methods do not commit. Status transitions use a conditional update against the current status to prevent stale requests from overwriting a newer state. The service does not have authentication or document-level authorization. Keep it restricted to a trusted local environment; do not expose it publicly until suitable access controls are implemented.
 
+## Processing foundation
+
+`app/services/document_processor.py` defines a synchronous processor protocol and immutable structured result segments with optional page or media-time provenance. The processor contract accepts no FastAPI request or database session objects. `app/services/document_processing_service.py` coordinates one injected processor: it claims `processing` in a short transaction, runs the processor without holding a database transaction, then conditionally records completion or a safe failure status. Stale transitions are rejected through the existing compare-and-set lifecycle service.
+
+There is no concrete processor, extraction/transcription implementation, persistence for processor result segments, or public processing endpoint yet. The orchestration is an internal foundation only; it does not fabricate successful results. Day 18 should implement PDF/TXT extraction behind this contract and decide how normalized segments are persisted.
+
 ## Database migrations
 
 The SQLAlchemy model defines metadata; Alembic migrations are the only supported workflow for changing database schemas. From `E:\Cognify\backend`, review the generated revision before applying it:

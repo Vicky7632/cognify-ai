@@ -1,6 +1,6 @@
 # Data flow
 
-> **Status:** Proposed pipelines only. No endpoints, processing jobs, or persistence are implemented.
+> **Status:** Upload, document persistence, and lifecycle status management are implemented. Day 17 adds an internal synchronous processor contract/orchestrator, but no concrete extractor, transcription implementation, or processing endpoint is wired. The extraction stages shown remain proposed.
 
 ## Ingestion
 
@@ -10,8 +10,14 @@ flowchart TD
     API --> Validate{Allowed type, size, and content?}
     Validate -->|No| Reject[Return explicit validation error]
     Validate -->|Yes| Create[Create document and processing state in PostgreSQL]
-    Create --> File[Store original via file storage abstraction]
-    File --> Route{PDF, TXT, MP3, WAV, MP4}
+    Create --> File[Store original via local file storage]
+    File --> State[Document starts uploaded]
+    State --> Orchestrator[Internal synchronous orchestration]
+    Orchestrator --> Claim[Conditional transition to processing]
+    Claim --> Processor[Injected processor contract]
+    Processor -->|Valid structured result| InternalComplete[Conditional transition to completed]
+    Processor -->|Expected or unexpected failure| InternalFailed[Record safe failure code]
+    Processor -. Day 17: no concrete implementation .-> Route{Future source-specific extraction}
     Route -->|PDF| PDF[Extract text with page references]
     Route -->|TXT| TXT[Decode and extract text]
     Route -->|MP3 / WAV| Audio[Local Whisper-compatible transcription]
@@ -21,14 +27,16 @@ flowchart TD
     TXT --> Normalize
     Audio --> Normalize
     Normalize --> Nonempty{Usable extracted content?}
-    Nonempty -->|No| Fail[Return explicit extraction/transcription error]
+    Nonempty -->|No| ExtractionFailure[Explicit extraction/transcription error]
     Nonempty -->|Yes| Chunk[Chunk content and retain provenance]
     Chunk --> Embed[Create embeddings]
     Embed --> Persist[Pinecone vector upsert]
-    Persist --> Complete[Record completion and metadata in PostgreSQL]
-    Complete --> Result[Return ingestion status and source identifier]
-    Normalize -->|Extraction/transcription failure| Failed[Record processing failure in PostgreSQL]
-    Failed --> Result
+    Persist --> CompletedWithIndex[Record completion after successful processing]
+    CompletedWithIndex --> Result[Return ingestion status and source identifier]
+    ExtractionFailure --> InternalFailed
+    InternalComplete --> Result[Internal processing outcome]
+    InternalFailed --> Result
+    CompletedWithIndex --> Result
 ```
 
 ### Ingestion requirements

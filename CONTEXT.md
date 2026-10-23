@@ -4,7 +4,7 @@
 
 Cognify AI is a standalone multimodal retrieval-augmented generation (RAG) application for learners. It is planned to accept PDF, TXT, MP3, WAV, and MP4 learning materials and provide evidence-grounded Q&A, citations, summaries, topic-wise notes, key concepts, and transcripts. Future LectureIQ integration must be through its existing Express backend. LectureIQ is separate; do not access or modify its source.
 
-The backend has a minimal FastAPI application with a health endpoint, document metadata and multipart upload APIs, lifecycle status management, Pydantic settings, lazy SQLAlchemy/PostgreSQL session management, the `Document` ORM model, and Alembic migrations. No frontend functionality, extraction, transcription, or multimodal RAG integrations have been implemented.
+The backend has a minimal FastAPI application with a health endpoint, document metadata and multipart upload APIs, lifecycle status management, a synchronous processor contract/orchestration foundation, Pydantic settings, lazy SQLAlchemy/PostgreSQL session management, the `Document` ORM model, and Alembic migrations. No frontend functionality, actual extraction, transcription, or multimodal RAG integrations have been implemented.
 
 ## Architecture and stack direction
 
@@ -39,9 +39,9 @@ When application work begins, keep a clear separation between API/transport, ing
 
 ## Current phase and next phase
 
-**Current phase:** Week 3, Day 16. The backend includes document metadata/upload APIs and status lifecycle management. Uploaded documents start as `uploaded`; allowed transitions are `uploaded` to `processing`, `processing` to `completed` or `failed`, and `failed` to `processing` for retry. Metadata-only records retain the legacy `pending` state. Failures record only the fixed `processing_failed` code. No actual processing, background worker, or queue exists. Document API access is unauthenticated and must remain restricted to a trusted local environment.
+**Current phase:** Week 3, Day 17. The backend has a typed processor contract and synchronous orchestration that brackets injected processing with short database transactions and existing conditional status transitions. Successful results require non-empty structured segments; expected and unexpected errors are reduced to the safe `processing_failed` code. No concrete processor, extraction, transcription, background worker, or public processing endpoint exists. Uploaded documents start as `uploaded`; metadata-only records retain legacy `pending`. Document API access is unauthenticated and must remain restricted to a trusted local environment.
 
-**Next planned phase:** Implement the first designated extraction/ingestion phase without introducing asynchronous infrastructure prematurely. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
+**Next planned phase (Day 18):** Evaluate and implement direct PDF/TXT text extraction behind the processor contract, preserving PDF page provenance. Keep media transcription, chunking, embeddings, vector storage, and asynchronous infrastructure out of that milestone unless separately approved. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
 
 ## Open decisions
 
