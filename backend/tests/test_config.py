@@ -14,6 +14,9 @@ def clear_application_environment(monkeypatch) -> None:
         "COGNIFY_UPLOAD_ROOT",
         "COGNIFY_MAX_UPLOAD_SIZE_BYTES",
         "DATABASE_URL",
+        "EMBEDDING_PROVIDER",
+        "EMBEDDING_MODEL",
+        "EMBEDDING_DIMENSIONS",
     ):
         monkeypatch.delenv(variable, raising=False)
 
@@ -24,6 +27,9 @@ def test_defaults_without_environment_or_dotenv(monkeypatch) -> None:
     assert settings.app_name == "Cognify AI"
     assert settings.api_v1_prefix == "/api/v1"
     assert settings.database_url is None
+    assert settings.embedding_provider is None
+    assert settings.embedding_model is None
+    assert settings.embedding_dimensions is None
     assert settings.max_upload_size_bytes == 25 * 1024 * 1024
     assert settings.upload_root == PROJECT_ROOT / "storage" / "uploads"
 
@@ -31,6 +37,11 @@ def test_defaults_without_environment_or_dotenv(monkeypatch) -> None:
 def test_rejects_nonpositive_maximum_upload_size() -> None:
     with pytest.raises(ValidationError, match="Maximum upload size"):
         Settings(max_upload_size_bytes=0, _env_file=None)
+
+
+def test_rejects_nonpositive_embedding_dimensions() -> None:
+    with pytest.raises(ValidationError, match="Embedding dimensions"):
+        Settings(embedding_dimensions=0, _env_file=None)
 
 
 def test_resolves_relative_upload_root_from_repository_root() -> None:
@@ -42,6 +53,9 @@ def test_resolves_relative_upload_root_from_repository_root() -> None:
 def test_environment_variables_override_defaults(monkeypatch) -> None:
     monkeypatch.setenv("COGNIFY_APP_NAME", "Test Cognify")
     monkeypatch.setenv("COGNIFY_API_V1_PREFIX", "/test/v1")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    monkeypatch.setenv("EMBEDDING_MODEL", "test-model")
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "3")
     monkeypatch.setenv(
         "DATABASE_URL", "postgresql+psycopg://test:test@localhost/test_db"
     )
@@ -50,6 +64,9 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
 
     assert settings.app_name == "Test Cognify"
     assert settings.api_v1_prefix == "/test/v1"
+    assert settings.embedding_provider == "fake"
+    assert settings.embedding_model == "test-model"
+    assert settings.embedding_dimensions == 3
     assert settings.database_url == "postgresql+psycopg://test:test@localhost/test_db"
 
 

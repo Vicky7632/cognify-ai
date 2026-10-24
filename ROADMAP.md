@@ -36,9 +36,11 @@ The roadmap is ordered by dependency. Each phase has a small acceptance gate and
 
 ## 6. Chunking, embeddings, and Pinecone integration
 
-- Define chunking and shared source metadata; select an embedding approach after evaluation.
+- **Implemented (Day 23):** provider-neutral embedding service contract, explicit optional provider/model/dimension settings, validation of inputs and returned finite vectors, consistent dimension checks, and batching at an adapter-declared maximum. No provider/model/dimension has been selected or integrated; no API credentials or external calls are needed.
+- **Next (Day 24):** evaluate available providers and models against licensing, cost, data handling, hardware/runtime, and quality requirements. Select a provider only after that review, then implement its adapter and establish actual model/vector dimensions.
+- Define chunking and shared source metadata; select the embedding approach after evaluation.
 - Integrate Pinecone for vectors and searchable metadata; define index/version/namespace, re-embedding, deletion, and consistency behavior.
-- **Acceptance:** tests cover chunk/provenance mapping, embedding compatibility, upsert/query failures, and no-result behavior. No reranking in v1.
+- **Acceptance:** tests cover provider contract/input-output validation and chunk/provenance mapping, embedding compatibility, upsert/query failures, and no-result behavior. No reranking in v1.
 
 ## 7. Retrieval and grounded answers with citations
 

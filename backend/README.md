@@ -2,7 +2,7 @@
 
 The backend is a standalone Python/FastAPI service using Pydantic Settings, SQLAlchemy, and PostgreSQL. Python **3.12.x** is the project target; Python 3.12.10 was available when this setup was verified. Direct runtime/test dependencies and their resolved transitive dependencies are pinned in [`requirements.txt`](requirements.txt) for repeatable pip installs. Pip manages a backend-local virtual environment; no additional dependency manager is required.
 
-The backend has a minimal FastAPI health route, document metadata and lifecycle APIs, multipart document upload, synchronous processing foundations, and local PDF/TXT extraction with PostgreSQL segment persistence. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; originals are stored under the configured local upload root. Media transcription and AI processing are not implemented.
+The backend has a minimal FastAPI health route, document metadata and lifecycle APIs, multipart document upload, synchronous processing foundations, local PDF/TXT extraction with PostgreSQL segment persistence, and a provider-neutral embedding service foundation. PostgreSQL is for relational application metadata; Pinecone will hold vectors and searchable metadata; originals are stored under the configured local upload root. Media transcription, a concrete embedding provider, and AI generation are not implemented.
 
 ## Windows PowerShell setup
 
@@ -76,6 +76,12 @@ The segment retrieval endpoint also has no authentication or ownership checks; i
 `app/services/document_processor.py` defines a synchronous processor protocol and immutable structured result segments with optional page or media-time provenance. The processor contract accepts no FastAPI request or database session objects. `app/services/document_processing_service.py` coordinates one injected processor: it claims `processing` in a short transaction, runs the processor without holding a database transaction, then conditionally records completion or a safe failure status. Stale transitions are rejected through the existing compare-and-set lifecycle service.
 
 The local processor extracts PDF text page by page with 1-based page provenance and decodes TXT as strict UTF-8 with optional BOM support. It resolves only generated storage keys beneath the configured upload root. Missing, unreadable, malformed, unsupported, or empty inputs fail with the existing safe `processing_failed` code. The internal processing service persists segments in ordinal order and commits them atomically with the completed status. Extraction runs outside database transactions. Neither processor nor orchestrator is exposed through an API. Apply the document-segment Alembic revision before using this persistence flow against a database.
+
+## Embedding service foundation
+
+`app/services/embedding_service.py` defines the `EmbeddingProvider` protocol and an `EmbeddingService` wrapper. Adapters receive non-empty text batches and a configured model, return exactly one numeric vector per input in the same order, and declare their maximum batch size. The service splits larger inputs at that limit without dropping or reordering texts. It rejects empty/invalid text, malformed or count-mismatched outputs, non-numeric or non-finite values, and inconsistent vector dimensions. Provider exceptions are replaced with a safe `EmbeddingProviderError`; raw provider exception messages are not exposed.
+
+Set `EMBEDDING_PROVIDER` and `EMBEDDING_MODEL` to construct a service with a registered provider adapter. `EMBEDDING_DIMENSIONS` is optional and, when configured, validates the expected vector size. Settings remain optional so application startup does not require an embedding provider. No provider adapter, model, vector dimension, credential variable, or external request has been selected or implemented in this phase; tests use a local fake provider. Day 24 is reserved for provider/model evaluation and selection before implementing a concrete adapter. Pinecone integration, embeddings persistence, and retrieval remain out of scope.
 
 ## Database migrations
 

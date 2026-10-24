@@ -12,7 +12,7 @@ The backend has a minimal FastAPI application with a health endpoint, document m
 - **Backend:** Python, FastAPI, Pydantic settings, SQLAlchemy, PostgreSQL, and HTTPX where useful.
 - **Vector search:** Pinecone for embeddings and searchable metadata, not relational application records.
 - **Files:** separate storage abstraction; local filesystem is acceptable for initial development.
-- **Processing/AI:** PDF/TXT extraction, FFmpeg video audio extraction, local Whisper-compatible transcription, embedding and LLM abstractions.
+- **Processing/AI:** PDF/TXT extraction, FFmpeg video audio extraction, local Whisper-compatible transcription, an embedding service/provider contract, and future LLM abstractions.
 - **Testing:** pytest is planned for backend tests; frontend test tooling remains open.
 - Prefer free/low-cost tools. Paid services are not mandatory. Provider/model/parser details remain open; do not assume services are configured.
 
@@ -39,9 +39,9 @@ When application work begins, keep a clear separation between API/transport, ing
 
 ## Current phase and next phase
 
-**Current phase:** Day 22, paginated document-segment retrieval API. The backend includes a `pypdf`-based local PDF/TXT processor implementing the typed synchronous contract. PDF text remains separated by 1-based source page; TXT uses strict UTF-8 decoding with optional BOM. Extracted segments persist in ordinal order in PostgreSQL, and completion is committed atomically with segment persistence. `GET /api/v1/documents/{document_id}/segments` returns ordered segments with bounded `limit`/`offset` pagination and total count. Empty/unreadable/malformed/unsupported inputs fail with the existing safe processing error code. The processor and orchestrator are not wired to a public endpoint. There is no transcription, background worker, or queue. The document-segment Alembic revision must be applied before using persistence or retrieval against a database. Uploaded documents start as `uploaded`; metadata-only records retain legacy `pending`. Document and segment API access is unauthenticated and not ownership-protected; the service must remain restricted to a trusted local environment.
+**Current phase:** Day 23, embedding service foundation. The backend includes a `pypdf`-based local PDF/TXT processor implementing the typed synchronous contract. PDF text remains separated by 1-based source page; TXT uses strict UTF-8 decoding with optional BOM. Extracted segments persist in ordinal order in PostgreSQL, and completion is committed atomically with segment persistence. `GET /api/v1/documents/{document_id}/segments` returns ordered segments with bounded `limit`/`offset` pagination and total count. The embedding service provides a provider-neutral typed batch contract, validates finite numeric output and vector dimensions, and splits requests using each adapter's declared batch limit. No provider, model, or vector dimension has been selected; configuration is optional until a provider adapter is chosen. There is no Pinecone integration, transcription, background worker, or queue. The document-segment Alembic revision must be applied before using persistence or retrieval against a database. Uploaded documents start as `uploaded`; metadata-only records retain legacy `pending`. Document and segment API access is unauthenticated and not ownership-protected; the service must remain restricted to a trusted local environment.
 
-**Next planned phase:** Audio/video transcription evaluation and implementation, following the roadmap. Do not add chunking, embeddings, vector storage, or asynchronous infrastructure without a designated phase. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
+**Next planned phase:** Day 24 provider evaluation and selection, followed by a concrete adapter and evidence-based model/dimension configuration. Pinecone integration and retrieval remain later roadmap work. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
 
 ## Open decisions
 

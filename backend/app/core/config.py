@@ -14,6 +14,18 @@ class Settings(BaseSettings):
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
     upload_root: Path = PROJECT_ROOT / "storage" / "uploads"
     max_upload_size_bytes: int = 25 * 1024 * 1024
+    embedding_provider: str | None = Field(
+        default=None,
+        validation_alias="EMBEDDING_PROVIDER",
+    )
+    embedding_model: str | None = Field(
+        default=None,
+        validation_alias="EMBEDDING_MODEL",
+    )
+    embedding_dimensions: int | None = Field(
+        default=None,
+        validation_alias="EMBEDDING_DIMENSIONS",
+    )
 
     @field_validator("upload_root")
     @classmethod
@@ -36,6 +48,13 @@ class Settings(BaseSettings):
     def validate_max_upload_size_bytes(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Maximum upload size must be greater than zero.")
+        return value
+
+    @field_validator("embedding_dimensions")
+    @classmethod
+    def validate_embedding_dimensions(cls, value: int | None) -> int | None:
+        if value is not None and value <= 0:
+            raise ValueError("Embedding dimensions must be greater than zero.")
         return value
 
     model_config = SettingsConfigDict(
