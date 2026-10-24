@@ -6,6 +6,19 @@ from sqlalchemy.orm import Session
 from app.models.document_segment import DocumentSegment
 
 
+def list_document_segments(
+    session: Session,
+    document_id: UUID,
+) -> list[DocumentSegment]:
+    """Return all segments for a document in ascending ordinal order."""
+    statement = (
+        select(DocumentSegment)
+        .where(DocumentSegment.document_id == document_id)
+        .order_by(DocumentSegment.ordinal.asc())
+    )
+    return list(session.scalars(statement).all())
+
+
 def get_document_segments(
     session: Session,
     document_id: UUID,

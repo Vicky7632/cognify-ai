@@ -85,6 +85,12 @@ The defaults are `EMBEDDING_PROVIDER=gemini`, `EMBEDDING_MODEL=gemini-embedding-
 
 Automated tests mock SDK responses and do not require a key, internet access, or paid usage. No live API request has been verified. Check Google's current account, pricing, and usage terms before use. Pinecone integration, embeddings persistence, and retrieval remain out of scope; the next work is chunking/index metadata design and the vector-store integration decision.
 
+## Document-to-embedding pipeline
+
+`app/services/document_embedding_service.py` loads all stored segments for an existing document in ascending ordinal order and submits their text to the configured embedding service. It returns an ordered tuple of `EmbeddedDocumentSegment` values containing the document ID, segment ID, ordinal, and vector. Missing documents, documents with no segments, malformed segment data, and provider/output failures are surfaced as explicit errors. The embedding service performs provider-bounded batching and validates output count, finite values, and dimensions; the pipeline additionally validates result count and consistent dimensions before associating vectors with segments.
+
+This is an internal generation-only flow. It currently loads the document's complete segment set into memory before the embedding service batches provider requests; very large-document streaming is future work. It does not write embeddings to PostgreSQL or Pinecone, alter document lifecycle status, add an API endpoint, or perform retrieval. A valid provider configuration (including `GEMINI_API_KEY` for Gemini) is required when the embedding service is constructed; tests inject a local fake and do not make external calls. The `document_segments` migration must already be applied before running the pipeline against a database.
+
 ## Database migrations
 
 The SQLAlchemy model defines metadata; Alembic migrations are the only supported workflow for changing database schemas. From `E:\Cognify\backend`, review the generated revision before applying it:
