@@ -13,6 +13,7 @@ from app.core.config import Settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.models.document import Document
+from app.models.document_segment import DocumentSegment
 
 
 @pytest.fixture
@@ -362,6 +363,147 @@ def test_list_and_get_documents(client: TestClient) -> None:
     assert retrieved.status_code == 200
     assert retrieved.json() == listed.json()[0]
     assert "storage_path" not in retrieved.json()
+
+
+def test_get_document_segments_returns_segments_in_ordinal_order(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/api/v1/documents",
+        json={"original_filename": "lesson.pdf", "file_type": "pdf"},
+    )
+    document_id = UUID(created.json()["id"])
+    with client.app.state.session_factory() as session:
+        with session.begin():
+            session.add_all(
+                [
+                    DocumentSegment(
+                        document_id=document_id,
+                        ordinal=2,
+                        text_content="Third page",
+                        page_number=3,
+                    ),
+                    DocumentSegment(
+                        document_id=document_id,
+                        ordinal=0,
+                        text_content="First page",
+                        page_number=1,
+                    ),
+                    DocumentSegment(
+                        document_id=document_id,
+                        ordinal=1,
+                        text_content="Second page",
+                        page_number=2,
+                    ),
+                ]
+            )
+
+    response = client.get(f"/api/v1/documents/{document_id}/segments")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert body["limit"] == 50
+    assert body["offset"] == 0
+    assert [segment["ordinal"] for segment in body["segments"]] == [0, 1, 2]
+    assert [segment["text_content"] for segment in body["segments"]] == [
+        "First page",
+        "Second page",
+        "Third page",
+    ]
+    assert [segment["page_number"] for segment in body["segments"]] == [1, 2, 3]
+    assert all(
+        segment["document_id"] == str(document_id)
+        for segment in body["segments"]
+    )
+    assert all(UUID(segment["id"]) for segment in body["segments"])
+    assert all(segment["start_seconds"] is None for segment in body["segments"])
+    assert all(segment["end_seconds"] is None for segment in body["segments"])
+
+
+def test_get_document_segments_paginates_but_reports_total_count(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/api/v1/documents",
+        json={"original_filename": "lesson.txt", "file_type": "txt"},
+    )
+    document_id = UUID(created.json()["id"])
+    with client.app.state.session_factory() as session:
+        with session.begin():
+            session.add_all(
+                [
+                    DocumentSegment(
+                        document_id=document_id,
+                        ordinal=ordinal,
+                        text_content=f"Segment {ordinal}",
+                    )
+                    for ordinal in range(4)
+                ]
+            )
+
+    response = client.get(
+        f"/api/v1/documents/{document_id}/segments",
+        params={"limit": 2, "offset": 1},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 4
+    assert body["limit"] == 2
+    assert body["offset"] == 1
+    assert [segment["ordinal"] for segment in body["segments"]] == [1, 2]
+
+
+def test_get_segments_for_existing_document_without_segments_returns_empty_page(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/api/v1/documents",
+        json={"original_filename": "empty.txt", "file_type": "txt"},
+    )
+
+    response = client.get(f"/api/v1/documents/{created.json()['id']}/segments")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "segments": [],
+        "total": 0,
+        "limit": 50,
+        "offset": 0,
+    }
+
+
+def test_get_segments_for_missing_document_returns_404(
+    client: TestClient,
+) -> None:
+    response = client.get(
+        "/api/v1/documents/00000000-0000-0000-0000-000000000001/segments"
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("parameter", "value"),
+    [("limit", 0), ("limit", 101), ("offset", -1)],
+)
+def test_get_document_segments_rejects_invalid_pagination(
+    client: TestClient,
+    parameter: str,
+    value: int,
+) -> None:
+    created = client.post(
+        "/api/v1/documents",
+        json={"original_filename": "lesson.txt", "file_type": "txt"},
+    )
+
+    response = client.get(
+        f"/api/v1/documents/{created.json()['id']}/segments",
+        params={parameter: value},
+    )
+
+    assert response.status_code == 422
 
 
 def test_update_status_and_delete_document(client: TestClient) -> None:

@@ -63,11 +63,13 @@ Successful uploads return `201 Created` with document ID, original filename, fil
 
 Uploads are streamed in bounded chunks to a temporary-unique server-generated path, with exclusive creation and partial-file cleanup. The API then stores the document row in a database transaction. If database persistence fails, it attempts to remove the newly written file and logs a fixed message if cleanup fails. The filesystem and PostgreSQL do not share a distributed transaction, so abrupt process termination or cleanup failure can leave an orphaned file; automated reconciliation/retention is future work. No file-serving or download route is provided.
 
-The existing `/api/v1/documents` routes create, list, retrieve, update status, and delete metadata only. Metadata creation does not accept a client-provided filesystem path. Response schemas exclude `storage_path`.
+The `/api/v1/documents` routes create, list, retrieve, update status, and delete document metadata. `GET /api/v1/documents/{document_id}/segments` returns persisted extracted segments in ordinal order with `limit` (1–100, default 50) and `offset` (minimum 0, default 0); its response includes the total segment count and each segment's source provenance. Missing documents return `404`, while documents with no segments return an empty `200` response. Metadata creation does not accept a client-provided filesystem path. Response schemas exclude `storage_path`.
 
 Uploaded documents begin in `uploaded`; metadata-only records retain `pending`. Allowed transitions are `pending` or `uploaded` to `processing`, `processing` to `completed` or `failed`, and `failed` to `processing` for retry. Completed documents are terminal. Failed processing stores only the fixed `processing_failed` error code; retry clears it. Invalid transitions return `409 Conflict`. This status API does not run processing or permit marking completion on behalf of work that has not succeeded.
 
 Mutation routes own the request transaction and commit only on success; errors roll back. Repository and service methods do not commit. Status transitions use a conditional update against the current status to prevent stale requests from overwriting a newer state. The service does not have authentication or document-level authorization. Keep it restricted to a trusted local environment; do not expose it publicly until suitable access controls are implemented.
+
+The segment retrieval endpoint also has no authentication or ownership checks; it is not ownership-protected. Restrict it to a trusted local environment until suitable access controls are implemented.
 
 ## Processing foundation
 

@@ -8,7 +8,8 @@ from app.models.document import (
     DocumentProcessingErrorCode,
     DocumentStatus,
 )
-from app.repositories import document_repository
+from app.models.document_segment import DocumentSegment
+from app.repositories import document_repository, document_segment_repository
 
 
 class InvalidDocumentTransitionError(ValueError):
@@ -57,6 +58,24 @@ def get_document(session: Session, document_id: UUID) -> Document | None:
 def list_documents(session: Session) -> list[Document]:
     """List documents in the repository's deterministic order."""
     return document_repository.list_documents(session)
+
+
+def list_document_segments(
+    session: Session,
+    document_id: UUID,
+    *,
+    offset: int,
+    limit: int,
+) -> tuple[list[DocumentSegment], int]:
+    """Return one ordered segment page and the document's total segment count."""
+    total = document_segment_repository.count_document_segments(session, document_id)
+    segments = document_segment_repository.get_document_segments(
+        session,
+        document_id,
+        offset=offset,
+        limit=limit,
+    )
+    return segments, total
 
 
 def update_document_status(

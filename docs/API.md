@@ -1,6 +1,6 @@
 # API
 
-> **Status:** The health endpoint, document metadata endpoints, and document upload endpoint are implemented. AI endpoints remain proposals. All routes use `/api/v1`.
+> **Status:** The health endpoint, document metadata/upload endpoints, and paginated document-segment retrieval are implemented. AI endpoints remain proposals. All routes use `/api/v1`.
 
 ## Endpoints
 
@@ -11,6 +11,7 @@
 | `POST` | `/api/v1/documents/upload` | Upload one supported file and create metadata | Implemented |
 | `GET` | `/api/v1/documents` | List document metadata | Implemented |
 | `GET` | `/api/v1/documents/{document_id}` | Read document metadata and processing status | Implemented |
+| `GET` | `/api/v1/documents/{document_id}/segments` | Retrieve ordered extracted segments with pagination | Implemented |
 | `PATCH` | `/api/v1/documents/{document_id}/status` | Update processing status | Implemented |
 | `DELETE` | `/api/v1/documents/{document_id}` | Delete the metadata record only | Implemented |
 | `POST` | `/api/v1/chat/sessions/{session_id}/messages` | Ask a question; return answer/abstention and citations | Proposed |
@@ -58,6 +59,12 @@ Accepts JSON with `original_filename` (1-255 characters) and `file_type` (`pdf`,
 ### `GET /api/v1/documents/{document_id}`
 
 Returns document metadata with `200 OK`, or `404 Not Found` when the UUID does not identify a record. The list endpoint returns the same metadata shape as an array. Responses never include `storage_path`.
+
+### `GET /api/v1/documents/{document_id}/segments`
+
+Returns persisted extracted segments ordered by their zero-based `ordinal`. Query parameters are `limit` (default `50`, range `1`–`100`) and `offset` (default `0`, minimum `0`). The response includes `total` (all segments for the document), `limit`, `offset`, and the page's `segments`. Each segment includes its IDs, ordinal, text, and optional page or media-time provenance. A missing document returns `404 Not Found`; an existing document with no segments returns `200 OK` with an empty list and `total: 0`. Invalid pagination values return `422 Unprocessable Entity`.
+
+This read endpoint uses the existing database session and document/segment service layers. It does not trigger processing. The service has no authentication or document-level authorization, so segment retrieval is not ownership-protected and must remain restricted to a trusted local environment until suitable access controls are implemented.
 
 ### `PATCH /api/v1/documents/{document_id}/status`
 

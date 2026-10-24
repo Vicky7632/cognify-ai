@@ -7,6 +7,7 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -24,6 +25,7 @@ from app.schemas.document import (
     to_document_response,
     validate_document_filename,
 )
+from app.schemas.document_segment import DocumentSegmentListResponse
 from app.services import document_service
 from app.services.document_service import InvalidDocumentTransitionError
 from app.services.file_storage import (
@@ -170,6 +172,44 @@ def get_document(
             detail="Document not found",
         )
     return to_document_response(document)
+
+
+@router.get(
+    "/{document_id}/segments",
+    response_model=DocumentSegmentListResponse,
+)
+def get_document_segments(
+    document_id: UUID,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    session: Session = Depends(get_db),
+) -> DocumentSegmentListResponse:
+    try:
+        document = document_service.get_document(session, document_id)
+        if document is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found",
+            )
+        segments, total = document_service.list_document_segments(
+            session,
+            document_id,
+            offset=offset,
+            limit=limit,
+        )
+    except SQLAlchemyError:
+        logger.error("Unable to retrieve document segments.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to retrieve document segments.",
+        ) from None
+
+    return DocumentSegmentListResponse(
+        segments=segments,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.patch("/{document_id}/status", response_model=DocumentResponse)
