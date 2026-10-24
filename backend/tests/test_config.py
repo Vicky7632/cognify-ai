@@ -17,6 +17,7 @@ def clear_application_environment(monkeypatch) -> None:
         "EMBEDDING_PROVIDER",
         "EMBEDDING_MODEL",
         "EMBEDDING_DIMENSIONS",
+        "GEMINI_API_KEY",
     ):
         monkeypatch.delenv(variable, raising=False)
 
@@ -27,9 +28,10 @@ def test_defaults_without_environment_or_dotenv(monkeypatch) -> None:
     assert settings.app_name == "Cognify AI"
     assert settings.api_v1_prefix == "/api/v1"
     assert settings.database_url is None
-    assert settings.embedding_provider is None
-    assert settings.embedding_model is None
-    assert settings.embedding_dimensions is None
+    assert settings.embedding_provider == "gemini"
+    assert settings.embedding_model == "gemini-embedding-001"
+    assert settings.embedding_dimensions == 3072
+    assert settings.gemini_api_key is None
     assert settings.max_upload_size_bytes == 25 * 1024 * 1024
     assert settings.upload_root == PROJECT_ROOT / "storage" / "uploads"
 
@@ -56,6 +58,7 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
     monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
     monkeypatch.setenv("EMBEDDING_MODEL", "test-model")
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "3")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv(
         "DATABASE_URL", "postgresql+psycopg://test:test@localhost/test_db"
     )
@@ -67,6 +70,8 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
     assert settings.embedding_provider == "fake"
     assert settings.embedding_model == "test-model"
     assert settings.embedding_dimensions == 3
+    assert settings.gemini_api_key is not None
+    assert settings.gemini_api_key.get_secret_value() == "test-key"
     assert settings.database_url == "postgresql+psycopg://test:test@localhost/test_db"
 
 

@@ -39,6 +39,10 @@ class EmbeddingProvider(Protocol):
         """Return one vector per input text, in the same order."""
         ...
 
+    def close(self) -> None:
+        """Release provider resources."""
+        ...
+
 
 class EmbeddingService:
     """Validate and batch texts through an injected embedding provider."""
@@ -79,6 +83,10 @@ class EmbeddingService:
         """Embed one non-empty text and return its finite numeric vector."""
         return self.embed_texts((text,))[0]
 
+    def close(self) -> None:
+        """Release resources held by the provider adapter."""
+        self._provider.close()
+
     def embed_texts(self, texts: Sequence[str]) -> EmbeddingBatch:
         """Embed non-empty texts in provider-sized batches, preserving order."""
         if isinstance(texts, (str, bytes)) or not isinstance(texts, Sequence):
@@ -96,6 +104,8 @@ class EmbeddingService:
                 raw_vectors = tuple(
                     self._provider.embed_batch(batch, model=self._model)
                 )
+            except EmbeddingOutputError:
+                raise
             except Exception:
                 raise EmbeddingProviderError(
                     "The embedding provider request failed."
@@ -153,18 +163,29 @@ class EmbeddingService:
 
 def create_embedding_service(
     settings: Settings,
-    providers: Mapping[str, EmbeddingProvider],
+    providers: Mapping[str, EmbeddingProvider] | None = None,
 ) -> EmbeddingService:
     """Build a service from explicit settings and registered provider adapters."""
     provider_name = settings.embedding_provider
     model = settings.embedding_model
-    if not provider_name or not provider_name.strip() or not model or not model.strip():
+    if not provider_name.strip() or not model.strip():
         raise EmbeddingConfigurationError(
             "Embedding provider and model must be configured."
         )
 
-    provider = providers.get(provider_name)
-    if provider is None:
+    if providers is not None:
+        provider = providers.get(provider_name)
+        if provider is None:
+            raise EmbeddingConfigurationError(
+                "The configured embedding provider is unavailable."
+            )
+    elif provider_name == "gemini":
+        from app.services.gemini_embedding_provider import (
+            create_gemini_embedding_provider,
+        )
+
+        provider = create_gemini_embedding_provider(settings)
+    else:
         raise EmbeddingConfigurationError(
             "The configured embedding provider is unavailable."
         )

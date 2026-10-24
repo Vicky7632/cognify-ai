@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -14,17 +14,22 @@ class Settings(BaseSettings):
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
     upload_root: Path = PROJECT_ROOT / "storage" / "uploads"
     max_upload_size_bytes: int = 25 * 1024 * 1024
-    embedding_provider: str | None = Field(
-        default=None,
+    embedding_provider: str = Field(
+        default="gemini",
         validation_alias="EMBEDDING_PROVIDER",
     )
-    embedding_model: str | None = Field(
-        default=None,
+    embedding_model: str = Field(
+        default="gemini-embedding-001",
         validation_alias="EMBEDDING_MODEL",
     )
-    embedding_dimensions: int | None = Field(
-        default=None,
+    embedding_dimensions: int = Field(
+        default=3072,
         validation_alias="EMBEDDING_DIMENSIONS",
+    )
+    gemini_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="GEMINI_API_KEY",
+        repr=False,
     )
 
     @field_validator("upload_root")
@@ -52,8 +57,8 @@ class Settings(BaseSettings):
 
     @field_validator("embedding_dimensions")
     @classmethod
-    def validate_embedding_dimensions(cls, value: int | None) -> int | None:
-        if value is not None and value <= 0:
+    def validate_embedding_dimensions(cls, value: int) -> int:
+        if value <= 0:
             raise ValueError("Embedding dimensions must be greater than zero.")
         return value
 

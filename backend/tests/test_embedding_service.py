@@ -27,6 +27,7 @@ class FakeEmbeddingProvider:
         self.vectors = vectors or {}
         self.failure = failure
         self.calls: list[tuple[tuple[str, ...], str]] = []
+        self.closed = False
 
     def embed_batch(
         self,
@@ -38,6 +39,9 @@ class FakeEmbeddingProvider:
         if self.failure is not None:
             raise self.failure
         return [self.vectors[text] for text in texts]
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_embeds_single_text() -> None:
@@ -200,11 +204,11 @@ def test_provider_failure_is_safe_and_does_not_expose_exception_details() -> Non
     assert error.value.__cause__ is None
 
 
-def test_missing_provider_or_model_configuration_is_rejected() -> None:
+def test_missing_gemini_api_key_is_rejected() -> None:
     settings = Settings(_env_file=None)
 
-    with pytest.raises(EmbeddingConfigurationError, match="must be configured"):
-        create_embedding_service(settings, {"fake": FakeEmbeddingProvider()})
+    with pytest.raises(EmbeddingConfigurationError, match="API key"):
+        create_embedding_service(settings)
 
 
 def test_unregistered_configured_provider_is_rejected_safely() -> None:
@@ -230,3 +234,12 @@ def test_factory_uses_configured_provider_model_and_dimension() -> None:
 
     assert service.embed_text("text") == (0.25, 0.75)
     assert provider.calls == [(("text",), "test-model")]
+
+
+def test_service_close_releases_provider_resources() -> None:
+    provider = FakeEmbeddingProvider()
+    service = EmbeddingService(provider, model="model")
+
+    service.close()
+
+    assert provider.closed is True

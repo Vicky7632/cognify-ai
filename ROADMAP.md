@@ -37,9 +37,9 @@ The roadmap is ordered by dependency. Each phase has a small acceptance gate and
 ## 6. Chunking, embeddings, and Pinecone integration
 
 - **Implemented (Day 23):** provider-neutral embedding service contract, explicit optional provider/model/dimension settings, validation of inputs and returned finite vectors, consistent dimension checks, and batching at an adapter-declared maximum. No provider/model/dimension has been selected or integrated; no API credentials or external calls are needed.
-- **Next (Day 24):** evaluate available providers and models against licensing, cost, data handling, hardware/runtime, and quality requirements. Select a provider only after that review, then implement its adapter and establish actual model/vector dimensions.
-- Define chunking and shared source metadata; select the embedding approach after evaluation.
-- Integrate Pinecone for vectors and searchable metadata; define index/version/namespace, re-embedding, deletion, and consistency behavior.
+- **Implemented (Day 24):** official `google-genai` SDK adapter for `gemini-embedding-001`, secure `GEMINI_API_KEY` configuration, configurable `output_dimensionality` (default 3072, documented model default), bounded 100-text requests, safe provider errors, and mocked SDK tests. No live API call has been made or verified.
+- **Next:** define chunking and shared source metadata; evaluate Gemini embedding task types and account/usage constraints, then integrate Pinecone for vectors and searchable metadata. Keep the model and dimension consistent for both document and query vectors.
+- Define Pinecone index/version/namespace, re-embedding, deletion, and consistency behavior before integration.
 - **Acceptance:** tests cover provider contract/input-output validation and chunk/provenance mapping, embedding compatibility, upsert/query failures, and no-result behavior. No reranking in v1.
 
 ## 7. Retrieval and grounded answers with citations

@@ -14,7 +14,7 @@ The backend has a minimal FastAPI application with a health endpoint, document m
 - **Files:** separate storage abstraction; local filesystem is acceptable for initial development.
 - **Processing/AI:** PDF/TXT extraction, FFmpeg video audio extraction, local Whisper-compatible transcription, an embedding service/provider contract, and future LLM abstractions.
 - **Testing:** pytest is planned for backend tests; frontend test tooling remains open.
-- Prefer free/low-cost tools. Paid services are not mandatory. Provider/model/parser details remain open; do not assume services are configured.
+- Prefer free/low-cost tools. Paid services are not mandatory. Gemini is selected for the initial embedding adapter; credentials and applicable account/usage terms must be configured and verified separately.
 
 PostgreSQL is intended for document metadata, processing status/errors, optional ownership/course associations, chat sessions/messages, and source/processing metadata. Use reviewed Alembic migrations for schema changes. See [the architecture decision](docs/decisions/0001-initial-architecture.md).
 
@@ -39,16 +39,16 @@ When application work begins, keep a clear separation between API/transport, ing
 
 ## Current phase and next phase
 
-**Current phase:** Day 23, embedding service foundation. The backend includes a `pypdf`-based local PDF/TXT processor implementing the typed synchronous contract. PDF text remains separated by 1-based source page; TXT uses strict UTF-8 decoding with optional BOM. Extracted segments persist in ordinal order in PostgreSQL, and completion is committed atomically with segment persistence. `GET /api/v1/documents/{document_id}/segments` returns ordered segments with bounded `limit`/`offset` pagination and total count. The embedding service provides a provider-neutral typed batch contract, validates finite numeric output and vector dimensions, and splits requests using each adapter's declared batch limit. No provider, model, or vector dimension has been selected; configuration is optional until a provider adapter is chosen. There is no Pinecone integration, transcription, background worker, or queue. The document-segment Alembic revision must be applied before using persistence or retrieval against a database. Uploaded documents start as `uploaded`; metadata-only records retain legacy `pending`. Document and segment API access is unauthenticated and not ownership-protected; the service must remain restricted to a trusted local environment.
+**Current phase:** Day 24, Google Gemini embedding provider integration. The backend includes a `pypdf`-based local PDF/TXT processor implementing the typed synchronous contract. PDF text remains separated by 1-based source page; TXT uses strict UTF-8 decoding with optional BOM. Extracted segments persist in ordinal order in PostgreSQL, and completion is committed atomically with segment persistence. `GET /api/v1/documents/{document_id}/segments` returns ordered segments with bounded `limit`/`offset` pagination and total count. The embedding service uses a provider-neutral typed batch contract; its Gemini adapter uses the official `google-genai` SDK and `gemini-embedding-001`. The configured default output size is 3072 dimensions, based on Gemini's documented model default, and can be overridden through `EMBEDDING_DIMENSIONS`; actual vector values and configured dimensions are validated. Gemini requests are batched at no more than 100 texts, and provider failures are exposed only as safe errors. `GEMINI_API_KEY` must be configured outside source control before embeddings are requested; no real API call has been verified. There is no Pinecone integration, transcription, background worker, or queue. The document-segment Alembic revision must be applied before using persistence or retrieval against a database. Uploaded documents start as `uploaded`; metadata-only records retain legacy `pending`. Document and segment API access is unauthenticated and not ownership-protected; the service must remain restricted to a trusted local environment.
 
-**Next planned phase:** Day 24 provider evaluation and selection, followed by a concrete adapter and evidence-based model/dimension configuration. Pinecone integration and retrieval remain later roadmap work. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
+**Next planned phase:** Evaluate and implement the document chunking and embedding-to-vector-store flow before Pinecone integration and retrieval. Keep dimensions and model consistent between document and query embeddings; verify provider account/usage constraints before production use. Make future schema changes through reviewed Alembic migrations; do not create tables directly or run schema DDL outside this workflow.
 
 ## Open decisions
 
 - Explicit repository license selection; no `LICENSE` exists until terms are confirmed.
 - Python/Node versions, package managers, project layouts, test/lint/type-check tools; PostgreSQL local setup.
 - PDF parser details beyond the initial `pypdf` extractor, upload limits, file retention, and safe storage lifecycle.
-- Embedding model/provider/dimensions; Pinecone index, namespaces, metadata, and cost approach.
+- Pinecone index, namespaces, metadata, and cost approach; evaluation of the selected Gemini model and task types.
 - Whisper-compatible model/runtime/license/hardware and FFmpeg distribution.
 - LLM provider/model, data privacy/retention terms, chunking/citation schema, API schemas, sync/job lifecycle.
 - Deployment and access-control design before non-local exposure.
