@@ -1,8 +1,8 @@
 # Vector storage
 
 `protocol.py` defines the provider-neutral `VectorStore` contract and typed
-records. The initial `PineconeVectorStore` adapter only upserts vectors and
-metadata; query and deletion operations are not implemented.
+records. The `PineconeVectorStore` adapter supports validated, batched upserts
+and similarity search. Deletion is not implemented.
 
 `DocumentVectorStorageService` combines the Day 25 document embedding pipeline
 with an injected vector store. It returns generated results only after all
@@ -16,6 +16,16 @@ The Pinecone service does not provide a transaction across adapter batches. If
 a later batch fails, earlier batches may already have been accepted; the
 service raises rather than reporting success. Retry/deletion reconciliation is
 not implemented.
+
+Similarity search accepts an embedding vector, a positive `top_k`, and an
+optional document UUID filter. The adapter validates finite values and
+configured dimensions, requests metadata, and converts ordered matches into
+typed results with the stable vector ID, document/segment UUIDs, ordinal,
+score, and available metadata. Malformed responses and SDK failures become
+safe application errors. `DocumentRetrievalService` embeds a non-empty text
+query with the injected embedding service before searching. Its default
+`top_k` is 10 and callers can provide another positive integer. Retrieval is
+internal; no HTTP endpoint or answer generation is provided.
 
 Configure `PINECONE_API_KEY`, `PINECONE_INDEX`, and
 `PINECONE_UPSERT_BATCH_SIZE` in the backend environment. The index must be

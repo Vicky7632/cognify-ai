@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import isfinite
 from numbers import Real
@@ -51,16 +51,75 @@ class VectorRecord:
     metadata: VectorMetadata
 
 
+VectorMetadataValue = str | int | float | bool | tuple[str | int | float | bool, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VectorSearchResult:
+    vector_id: str
+    document_id: UUID
+    segment_id: UUID
+    ordinal: int
+    score: float
+    metadata: Mapping[str, VectorMetadataValue]
+
+
 class VectorStore(Protocol):
-    """Provider-neutral interface for upserting typed vector records."""
+    """Provider-neutral interface for vector upsert and similarity search."""
 
     def upsert(self, records: Sequence[VectorRecord]) -> None:
         """Upsert records or raise an application-level provider error."""
         ...
 
+    def search(
+        self,
+        query_vector: Sequence[Real],
+        *,
+        top_k: int,
+        document_id: UUID | None = None,
+    ) -> tuple[VectorSearchResult, ...]:
+        """Return nearest records in provider score order."""
+        ...
+
     def close(self) -> None:
         """Release provider resources."""
         ...
+
+
+def validate_query_vector(
+    query_vector: Sequence[Real],
+    *,
+    expected_dimensions: int,
+) -> tuple[float, ...]:
+    if isinstance(query_vector, (str, bytes)) or not isinstance(
+        query_vector, Sequence
+    ):
+        raise VectorStoreInputError("Query vector must be a sequence of numbers.")
+    if not query_vector:
+        raise VectorStoreInputError("Query vector must not be empty.")
+    if len(query_vector) != expected_dimensions:
+        raise VectorStoreInputError(
+            "Query vector dimensions do not match the configured index dimension."
+        )
+
+    values: list[float] = []
+    for value in query_vector:
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise VectorStoreInputError(
+                "Query vector values must be finite numeric values."
+            )
+        try:
+            numeric_value = float(value)
+        except (OverflowError, ValueError):
+            raise VectorStoreInputError(
+                "Query vector values must be finite numeric values."
+            ) from None
+        if not isfinite(numeric_value):
+            raise VectorStoreInputError(
+                "Query vector values must be finite numeric values."
+            )
+        values.append(numeric_value)
+    return tuple(values)
 
 
 def validate_vector_records(

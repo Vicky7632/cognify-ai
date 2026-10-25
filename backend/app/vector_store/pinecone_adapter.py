@@ -1,4 +1,7 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from math import isfinite
+from numbers import Real
+from types import MappingProxyType
 from typing import Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -8,9 +11,13 @@ from app.core.config import Settings
 from app.services.document_embedding_service import EmbeddedDocumentSegment
 from app.vector_store.protocol import (
     VectorMetadata,
+    VectorMetadataValue,
     VectorRecord,
+    VectorSearchResult,
     VectorStoreConfigurationError,
     VectorStoreError,
+    VectorStoreInputError,
+    validate_query_vector,
     validate_vector_records,
 )
 
@@ -26,6 +33,16 @@ class _PineconeIndex(Protocol):
         max_concurrency: int = 8,
         timeout: float | None = None,
         total_timeout: float | None = None,
+    ) -> object:
+        ...
+
+    def query(
+        self,
+        *,
+        vector: Sequence[float],
+        top_k: int,
+        filter: Mapping[str, object] | None = None,
+        include_metadata: bool = False,
     ) -> object:
         ...
 
@@ -124,6 +141,38 @@ class PineconeVectorStore:
             except Exception:
                 raise VectorStoreError("Pinecone vector upsert failed.") from None
 
+    def search(
+        self,
+        query_vector: Sequence[Real],
+        *,
+        top_k: int,
+        document_id: UUID | None = None,
+    ) -> tuple[VectorSearchResult, ...]:
+        """Search nearest vectors, optionally restricting matches to one document."""
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1:
+            raise VectorStoreInputError("top_k must be a positive integer.")
+        if document_id is not None and not isinstance(document_id, UUID):
+            raise VectorStoreInputError("Document filter must be a UUID.")
+        vector = validate_query_vector(
+            query_vector,
+            expected_dimensions=self._expected_dimensions,
+        )
+        metadata_filter = (
+            {"document_id": {"$eq": str(document_id)}}
+            if document_id is not None
+            else None
+        )
+        try:
+            response = self._index.query(
+                vector=vector,
+                top_k=top_k,
+                filter=metadata_filter,
+                include_metadata=True,
+            )
+        except Exception:
+            raise VectorStoreError("Pinecone similarity search failed.") from None
+        return _parse_search_response(response)
+
     def close(self) -> None:
         """Close the SDK client and its underlying connections."""
         self._client.close()
@@ -155,6 +204,86 @@ def vector_record_for_segment(segment: EmbeddedDocumentSegment) -> VectorRecord:
             ordinal=segment.ordinal,
         ),
     )
+
+
+def _parse_search_response(response: object) -> tuple[VectorSearchResult, ...]:
+    try:
+        matches = getattr(response, "matches", None)
+        if not isinstance(matches, Sequence) or isinstance(matches, (str, bytes)):
+            raise ValueError
+
+        results: list[VectorSearchResult] = []
+        for match in matches:
+            vector_id = getattr(match, "id", None)
+            score = getattr(match, "score", None)
+            metadata = getattr(match, "metadata", None)
+            if (
+                not isinstance(vector_id, str)
+                or not vector_id.strip()
+                or isinstance(score, bool)
+                or not isinstance(score, Real)
+                or not isfinite(score)
+                or not isinstance(metadata, Mapping)
+            ):
+                raise ValueError
+
+            document_id = UUID(_required_metadata_string(metadata, "document_id"))
+            segment_id = UUID(_required_metadata_string(metadata, "segment_id"))
+            ordinal = metadata.get("ordinal")
+            if (
+                isinstance(ordinal, bool)
+                or not isinstance(ordinal, int)
+                or ordinal < 0
+                or vector_id != stable_segment_vector_id(document_id, segment_id)
+            ):
+                raise ValueError
+            normalized_metadata = _normalize_metadata(metadata)
+            results.append(
+                VectorSearchResult(
+                    vector_id=vector_id,
+                    document_id=document_id,
+                    segment_id=segment_id,
+                    ordinal=ordinal,
+                    score=float(score),
+                    metadata=MappingProxyType(normalized_metadata),
+                )
+            )
+        return tuple(results)
+    except Exception:
+        raise VectorStoreError(
+            "Pinecone returned a malformed similarity response."
+        ) from None
+
+
+def _required_metadata_string(metadata: Mapping[str, object], key: str) -> str:
+    value = metadata.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError
+    return value
+
+
+def _normalize_metadata(
+    metadata: Mapping[str, object],
+) -> dict[str, VectorMetadataValue]:
+    normalized: dict[str, VectorMetadataValue] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str):
+            raise ValueError
+        if isinstance(value, (str, bool, int)):
+            normalized[key] = value
+        elif isinstance(value, float):
+            if not isfinite(value):
+                raise ValueError
+            normalized[key] = value
+        elif isinstance(value, list) and all(
+            isinstance(item, (str, bool, int))
+            or isinstance(item, float) and isfinite(item)
+            for item in value
+        ):
+            normalized[key] = tuple(value)
+        else:
+            raise ValueError
+    return normalized
 
 
 def create_pinecone_vector_store(
