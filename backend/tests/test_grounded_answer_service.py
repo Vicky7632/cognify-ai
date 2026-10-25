@@ -185,6 +185,109 @@ def test_page_number_is_omitted_when_unavailable(
     assert result.citations[0].page_number is None
 
 
+@pytest.mark.parametrize("page_number", (True, 0, -1, "2"))
+def test_invalid_persisted_page_number_is_not_cited(
+    session_factory: sessionmaker[Session],
+    page_number: object,
+) -> None:
+    document_id, _ = create_source(session_factory)
+    provider = FakeAnswerProvider()
+    service, retrieval = make_service([match_for(document_id)], provider)
+    invalid_segment = SimpleNamespace(
+        id=SEGMENT_ID,
+        document_id=document_id,
+        ordinal=5,
+        page_number=page_number,
+        text_content="Valid source content.",
+        document=SimpleNamespace(
+            original_filename="retrieval-guide.pdf",
+            file_type="pdf",
+        ),
+    )
+    service = GroundedAnswerService(
+        retrieval,
+        provider,
+        segment_loader=lambda _session, _ids: [invalid_segment],
+    )
+
+    with session_factory() as session:
+        result = service.answer(session, "Question?")
+
+    assert result.insufficient_evidence is True
+    assert result.citations == ()
+    assert provider.prompts == []
+
+
+def test_database_source_document_must_match_retrieval_result(
+    session_factory: sessionmaker[Session],
+) -> None:
+    document_id, _ = create_source(session_factory)
+    provider = FakeAnswerProvider()
+    service, retrieval = make_service([match_for(document_id)], provider)
+    mismatched_segment = SimpleNamespace(
+        id=SEGMENT_ID,
+        document_id=UUID("00000000-0000-0000-0000-000000000099"),
+        ordinal=5,
+        page_number=2,
+        text_content="Content from another document.",
+        document=SimpleNamespace(
+            original_filename="other.pdf",
+            file_type="pdf",
+        ),
+    )
+    service = GroundedAnswerService(
+        retrieval,
+        provider,
+        segment_loader=lambda _session, _ids: [mismatched_segment],
+    )
+
+    with session_factory() as session:
+        result = service.answer(session, "Question?")
+
+    assert result.insufficient_evidence is True
+    assert result.citations == ()
+    assert provider.prompts == []
+
+
+def test_citations_preserve_retrieval_order_and_use_stored_sources(
+    session_factory: sessionmaker[Session],
+) -> None:
+    document_id, first_segment_id = create_source(session_factory)
+    second_segment_id = UUID("00000000-0000-0000-0000-000000000004")
+    with session_factory() as session:
+        with session.begin():
+            session.add(
+                DocumentSegment(
+                    id=second_segment_id,
+                    document_id=document_id,
+                    ordinal=1,
+                    text_content="The second stored source.",
+                    page_number=1,
+                )
+            )
+    provider = FakeAnswerProvider()
+    service, _ = make_service(
+        [
+            match_for(document_id, second_segment_id, ordinal=1, score=0.95),
+            match_for(document_id, first_segment_id, ordinal=5, score=0.91),
+        ],
+        provider,
+    )
+
+    with session_factory() as session:
+        result = service.answer(session, "Question?")
+
+    assert [citation.segment_id for citation in result.citations] == [
+        second_segment_id,
+        first_segment_id,
+    ]
+    assert [citation.ordinal for citation in result.citations] == [1, 5]
+    assert [source.text_content for source in provider.prompts[0].sources] == [
+        "The second stored source.",
+        "The source explains semantic retrieval.",
+    ]
+
+
 def test_no_search_results_abstains_without_loading_or_calling_provider(
     session_factory: sessionmaker[Session],
 ) -> None:

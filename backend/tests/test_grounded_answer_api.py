@@ -85,7 +85,11 @@ def answer_client() -> Generator[
     engine.dispose()
 
 
-def add_source(session_factory: sessionmaker[Session]) -> tuple[UUID, UUID]:
+def add_source(
+    session_factory: sessionmaker[Session],
+    *,
+    text_content: str = "The stored source describes retrieval.",
+) -> tuple[UUID, UUID]:
     with session_factory() as session:
         with session.begin():
             document = create_document(
@@ -98,7 +102,7 @@ def add_source(session_factory: sessionmaker[Session]) -> tuple[UUID, UUID]:
                 id=SEGMENT_ID,
                 document_id=document.id,
                 ordinal=0,
-                text_content="The stored source describes retrieval.",
+                text_content=text_content,
             )
             session.add(segment)
             session.flush()
@@ -229,13 +233,21 @@ def test_provider_failure_is_safe_at_api_boundary(
     ],
 ) -> None:
     client, session_factory, retrieval, provider = answer_client
-    document_id, segment_id = add_source(session_factory)
+    query_secret = "sensitive-query-sentinel"
+    document_secret = "sensitive-document-sentinel"
+    document_id, segment_id = add_source(
+        session_factory,
+        text_content=document_secret,
+    )
     retrieval.matches = (make_match(document_id, segment_id),)
-    provider.failure = RuntimeError("provider error with secret API key")
+    provider.failure = RuntimeError(
+        "provider error with secret API key, "
+        f"{query_secret}, {document_secret}"
+    )
 
     response = client.post(
         "/api/v1/retrieval/answer",
-        json={"query": "Question?"},
+        json={"query": query_secret},
     )
 
     assert response.status_code == 502
@@ -243,6 +255,8 @@ def test_provider_failure_is_safe_at_api_boundary(
         "detail": "Grounded answer generation failed."
     }
     assert "secret" not in response.text
+    assert query_secret not in response.text
+    assert document_secret not in response.text
 
 
 def test_retrieval_failure_is_safe_at_api_boundary(
