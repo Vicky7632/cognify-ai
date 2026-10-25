@@ -2,7 +2,7 @@
 
 Cognify AI is a planned, standalone multimodal RAG application for helping learners search and study their own materials. Users will be able to upload documents and recordings, ask questions grounded in those sources, and navigate citations back to source pages or timestamps.
 
-> **Current status:** The standalone FastAPI backend implements document metadata/upload and segment retrieval, PDF/TXT extraction foundations, Gemini embeddings, Pinecone upsert and semantic retrieval. No frontend, media transcription, LLM answer generation, or public retrieval endpoint authorization is implemented.
+> **Current status:** The standalone FastAPI backend implements document metadata/upload and segment retrieval, PDF/TXT extraction foundations, Gemini embeddings, Pinecone upsert and semantic retrieval, and a grounded-answer pipeline with database-derived citations. Grounded answer generation requires explicit LLM model configuration. No frontend or media transcription is implemented.
 
 ## Problem and planned features
 
@@ -40,9 +40,9 @@ PostgreSQL is for relational application data and processing state. Pinecone is 
 
 ## Setup status
 
-Backend setup, configuration, and run instructions are documented in [backend/README.md](backend/README.md). The retrieval route is `POST /api/v1/retrieval/search`; it embeds the submitted query and returns matching segment IDs and metadata, but does not generate answers. Pinecone and Gemini credentials and a pre-created dimension-compatible Pinecone index are required to use it. Tests use fakes and do not call live services. The frontend and media transcription remain unimplemented.
+Backend setup, configuration, and run instructions are documented in [backend/README.md](backend/README.md). `POST /api/v1/retrieval/search` returns semantic matches; `POST /api/v1/retrieval/answer` loads retrieved text from PostgreSQL, generates a grounded answer, and returns citations derived from persisted source records. Answer requests require `LLM_PROVIDER=gemini`, an explicitly selected supported `LLM_MODEL`, `GEMINI_API_KEY`, Pinecone credentials, and a pre-created dimension-compatible index. The project does not select a generation-model default. Tests use fakes and do not call live services. The frontend and media transcription remain unimplemented.
 
-The [.env.example](.env.example) file lists planned configuration names with placeholders only. It is not an application configuration contract yet. Do not put secrets in frontend code or commit `.env`.
+The [.env.example](.env.example) file lists configuration names with placeholders only; consult [backend setup](backend/README.md) for active settings and required values. Do not put secrets in frontend code or commit `.env`.
 
 ## Documentation
 

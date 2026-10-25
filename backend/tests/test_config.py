@@ -17,6 +17,8 @@ def clear_application_environment(monkeypatch) -> None:
         "EMBEDDING_PROVIDER",
         "EMBEDDING_MODEL",
         "EMBEDDING_DIMENSIONS",
+        "LLM_PROVIDER",
+        "LLM_MODEL",
         "GEMINI_API_KEY",
         "PINECONE_API_KEY",
         "PINECONE_INDEX",
@@ -34,6 +36,8 @@ def test_defaults_without_environment_or_dotenv(monkeypatch) -> None:
     assert settings.embedding_provider == "gemini"
     assert settings.embedding_model == "gemini-embedding-001"
     assert settings.embedding_dimensions == 3072
+    assert settings.llm_provider is None
+    assert settings.llm_model is None
     assert settings.gemini_api_key is None
     assert settings.pinecone_api_key is None
     assert settings.pinecone_index is None
@@ -69,6 +73,8 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
     monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
     monkeypatch.setenv("EMBEDDING_MODEL", "test-model")
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "3")
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("LLM_MODEL", "configured-model")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("PINECONE_API_KEY", "pinecone-test-key")
     monkeypatch.setenv("PINECONE_INDEX", "cognify-test-index")
@@ -84,6 +90,8 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
     assert settings.embedding_provider == "fake"
     assert settings.embedding_model == "test-model"
     assert settings.embedding_dimensions == 3
+    assert settings.llm_provider == "gemini"
+    assert settings.llm_model == "configured-model"
     assert settings.gemini_api_key is not None
     assert settings.gemini_api_key.get_secret_value() == "test-key"
     assert settings.pinecone_api_key is not None

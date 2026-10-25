@@ -1,7 +1,8 @@
+from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.document_segment import DocumentSegment
 
@@ -45,6 +46,21 @@ def count_document_segments(session: Session, document_id: UUID) -> int:
         .where(DocumentSegment.document_id == document_id)
     )
     return session.execute(statement).scalar_one()
+
+
+def get_document_segments_by_ids(
+    session: Session,
+    segment_ids: Sequence[UUID],
+) -> list[DocumentSegment]:
+    """Load existing segments and their document metadata by segment ID."""
+    if not segment_ids:
+        return []
+    statement = (
+        select(DocumentSegment)
+        .options(joinedload(DocumentSegment.document))
+        .where(DocumentSegment.id.in_(set(segment_ids)))
+    )
+    return list(session.scalars(statement).all())
 
 
 def replace_document_segments(

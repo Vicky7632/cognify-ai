@@ -26,6 +26,14 @@ class Settings(BaseSettings):
         default=3072,
         validation_alias="EMBEDDING_DIMENSIONS",
     )
+    llm_provider: str | None = Field(
+        default=None,
+        validation_alias="LLM_PROVIDER",
+    )
+    llm_model: str | None = Field(
+        default=None,
+        validation_alias="LLM_MODEL",
+    )
     gemini_api_key: SecretStr | None = Field(
         default=None,
         validation_alias="GEMINI_API_KEY",

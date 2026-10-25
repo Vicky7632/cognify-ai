@@ -1,6 +1,6 @@
 # API
 
-> **Status:** The health endpoint, document metadata/upload endpoints, paginated document-segment retrieval, and semantic vector retrieval are implemented. Chat, answer generation, and other AI endpoints remain proposals. All routes use `/api/v1`.
+> **Status:** The health endpoint, document metadata/upload endpoints, paginated document-segment retrieval, semantic vector retrieval, and grounded answer endpoint are implemented. Chat sessions, summaries, and study-note endpoints remain proposals. All routes use `/api/v1`.
 
 ## Endpoints
 
@@ -13,6 +13,7 @@
 | `GET` | `/api/v1/documents/{document_id}` | Read document metadata and processing status | Implemented |
 | `GET` | `/api/v1/documents/{document_id}/segments` | Retrieve ordered extracted segments with pagination | Implemented |
 | `POST` | `/api/v1/retrieval/search` | Retrieve semantically similar stored segments | Implemented |
+| `POST` | `/api/v1/retrieval/answer` | Generate a grounded answer with verified citations | Implemented |
 | `PATCH` | `/api/v1/documents/{document_id}/status` | Update processing status | Implemented |
 | `DELETE` | `/api/v1/documents/{document_id}` | Delete the metadata record only | Implemented |
 | `POST` | `/api/v1/chat/sessions/{session_id}/messages` | Ask a question; return answer/abstention and citations | Proposed |
@@ -44,6 +45,28 @@ The `200 OK` response contains the normalized query, selected `top_k`, and a `re
 Invalid input returns `422 Unprocessable Entity`. Missing or invalid provider/index configuration returns a generic `503 Service Unavailable`. Gemini or Pinecone request failures and malformed provider output return a generic `502 Bad Gateway`; provider details and credentials are not returned.
 
 This endpoint has no authentication or ownership authorization. It is not safe to expose publicly without suitable access controls. A Gemini API key and Pinecone API key/index are required at request time; the index must already exist and match `EMBEDDING_DIMENSIONS`. Tests replace the retrieval dependency with fakes and make no network calls.
+
+## `POST /api/v1/retrieval/answer`
+
+Runs semantic retrieval, loads matching segment text and document metadata from PostgreSQL, then requests a grounded answer from the configured LLM provider. Pinecone metadata is not treated as segment text. Only existing stored segments whose document ID and ordinal match the retrieval result are included as context. The prompt treats retrieved text as untrusted content, and backend citations are assembled from the verified database records rather than model output.
+
+Request JSON:
+
+```json
+{
+  "query": "What does the material explain?",
+  "top_k": 10,
+  "document_id": "d07962f8-c430-4b0b-b4bb-38ca63c1c083"
+}
+```
+
+`query` must contain 1–10,000 non-whitespace characters. `top_k` is an integer from 1 through 100 and defaults to 10. `document_id` is an optional UUID filter.
+
+The response contains `answer`, `citations`, and `insufficient_evidence`. Each citation contains the persisted document and segment UUIDs, ordinal, original filename, file type, and retrieval score; a positive page number is included only when the stored segment has one. When retrieval returns no results, all matching segment rows are missing, or no valid stored text is available, the endpoint returns a clear insufficient-evidence answer with an empty citations list and does not call the LLM.
+
+Invalid input returns `422`; missing provider configuration returns a generic `503`; embedding, Pinecone, or LLM provider failures return a generic `502`; PostgreSQL lookup failures return a generic `500`. Provider credentials and raw exception messages are not included in responses.
+
+The Gemini generation adapter uses the existing `google-genai` SDK and `GEMINI_API_KEY`. No generation model is selected by default. Set `LLM_PROVIDER=gemini` and `LLM_MODEL` to an explicitly selected supported generation model before use. Tests inject fake retrieval, persistence, and generation providers and make no live API calls. The endpoint is unauthenticated and not ownership-protected; restrict it to a trusted local environment.
 
 ## Implemented document metadata endpoints
 
