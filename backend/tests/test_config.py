@@ -18,6 +18,9 @@ def clear_application_environment(monkeypatch) -> None:
         "EMBEDDING_MODEL",
         "EMBEDDING_DIMENSIONS",
         "GEMINI_API_KEY",
+        "PINECONE_API_KEY",
+        "PINECONE_INDEX",
+        "PINECONE_UPSERT_BATCH_SIZE",
     ):
         monkeypatch.delenv(variable, raising=False)
 
@@ -32,6 +35,9 @@ def test_defaults_without_environment_or_dotenv(monkeypatch) -> None:
     assert settings.embedding_model == "gemini-embedding-001"
     assert settings.embedding_dimensions == 3072
     assert settings.gemini_api_key is None
+    assert settings.pinecone_api_key is None
+    assert settings.pinecone_index is None
+    assert settings.pinecone_upsert_batch_size == 100
     assert settings.max_upload_size_bytes == 25 * 1024 * 1024
     assert settings.upload_root == PROJECT_ROOT / "storage" / "uploads"
 
@@ -44,6 +50,11 @@ def test_rejects_nonpositive_maximum_upload_size() -> None:
 def test_rejects_nonpositive_embedding_dimensions() -> None:
     with pytest.raises(ValidationError, match="Embedding dimensions"):
         Settings(embedding_dimensions=0, _env_file=None)
+
+
+def test_rejects_nonpositive_pinecone_batch_size() -> None:
+    with pytest.raises(ValidationError, match="Pinecone upsert batch size"):
+        Settings(pinecone_upsert_batch_size=0, _env_file=None)
 
 
 def test_resolves_relative_upload_root_from_repository_root() -> None:
@@ -59,6 +70,9 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
     monkeypatch.setenv("EMBEDDING_MODEL", "test-model")
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "3")
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("PINECONE_API_KEY", "pinecone-test-key")
+    monkeypatch.setenv("PINECONE_INDEX", "cognify-test-index")
+    monkeypatch.setenv("PINECONE_UPSERT_BATCH_SIZE", "25")
     monkeypatch.setenv(
         "DATABASE_URL", "postgresql+psycopg://test:test@localhost/test_db"
     )
@@ -72,6 +86,10 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
     assert settings.embedding_dimensions == 3
     assert settings.gemini_api_key is not None
     assert settings.gemini_api_key.get_secret_value() == "test-key"
+    assert settings.pinecone_api_key is not None
+    assert settings.pinecone_api_key.get_secret_value() == "pinecone-test-key"
+    assert settings.pinecone_index == "cognify-test-index"
+    assert settings.pinecone_upsert_batch_size == 25
     assert settings.database_url == "postgresql+psycopg://test:test@localhost/test_db"
 
 

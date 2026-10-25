@@ -31,6 +31,19 @@ class Settings(BaseSettings):
         validation_alias="GEMINI_API_KEY",
         repr=False,
     )
+    pinecone_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="PINECONE_API_KEY",
+        repr=False,
+    )
+    pinecone_index: str | None = Field(
+        default=None,
+        validation_alias="PINECONE_INDEX",
+    )
+    pinecone_upsert_batch_size: int = Field(
+        default=100,
+        validation_alias="PINECONE_UPSERT_BATCH_SIZE",
+    )
 
     @field_validator("upload_root")
     @classmethod
@@ -60,6 +73,13 @@ class Settings(BaseSettings):
     def validate_embedding_dimensions(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Embedding dimensions must be greater than zero.")
+        return value
+
+    @field_validator("pinecone_upsert_batch_size")
+    @classmethod
+    def validate_pinecone_upsert_batch_size(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Pinecone upsert batch size must be greater than zero.")
         return value
 
     model_config = SettingsConfigDict(
