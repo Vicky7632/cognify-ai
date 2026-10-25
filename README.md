@@ -2,7 +2,7 @@
 
 Cognify AI is a planned, standalone multimodal RAG application for helping learners search and study their own materials. Users will be able to upload documents and recordings, ask questions grounded in those sources, and navigate citations back to source pages or timestamps.
 
-> **Current status:** Documentation and repository structure only. No frontend, API, database, extraction, transcription, vector search, or AI feature is implemented.
+> **Current status:** The standalone FastAPI backend implements document metadata/upload and segment retrieval, PDF/TXT extraction foundations, Gemini embeddings, Pinecone upsert and semantic retrieval. No frontend, media transcription, LLM answer generation, or public retrieval endpoint authorization is implemented.
 
 ## Problem and planned features
 
@@ -40,7 +40,7 @@ PostgreSQL is for relational application data and processing state. Pinecone is 
 
 ## Setup status
 
-There is no runnable application or dependency manifest yet. Setup and run instructions are therefore **pending**; no Python/Node dependencies or services are installed or configured by this baseline. See [CONTEXT.md](CONTEXT.md) and [ROADMAP.md](ROADMAP.md) before implementation.
+Backend setup, configuration, and run instructions are documented in [backend/README.md](backend/README.md). The retrieval route is `POST /api/v1/retrieval/search`; it embeds the submitted query and returns matching segment IDs and metadata, but does not generate answers. Pinecone and Gemini credentials and a pre-created dimension-compatible Pinecone index are required to use it. Tests use fakes and do not call live services. The frontend and media transcription remain unimplemented.
 
 The [.env.example](.env.example) file lists planned configuration names with placeholders only. It is not an application configuration contract yet. Do not put secrets in frontend code or commit `.env`.
 

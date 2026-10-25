@@ -1,6 +1,6 @@
 # API
 
-> **Status:** The health endpoint, document metadata/upload endpoints, and paginated document-segment retrieval are implemented. AI endpoints remain proposals. All routes use `/api/v1`.
+> **Status:** The health endpoint, document metadata/upload endpoints, paginated document-segment retrieval, and semantic vector retrieval are implemented. Chat, answer generation, and other AI endpoints remain proposals. All routes use `/api/v1`.
 
 ## Endpoints
 
@@ -12,6 +12,7 @@
 | `GET` | `/api/v1/documents` | List document metadata | Implemented |
 | `GET` | `/api/v1/documents/{document_id}` | Read document metadata and processing status | Implemented |
 | `GET` | `/api/v1/documents/{document_id}/segments` | Retrieve ordered extracted segments with pagination | Implemented |
+| `POST` | `/api/v1/retrieval/search` | Retrieve semantically similar stored segments | Implemented |
 | `PATCH` | `/api/v1/documents/{document_id}/status` | Update processing status | Implemented |
 | `DELETE` | `/api/v1/documents/{document_id}` | Delete the metadata record only | Implemented |
 | `POST` | `/api/v1/chat/sessions/{session_id}/messages` | Ask a question; return answer/abstention and citations | Proposed |
@@ -21,6 +22,28 @@
 | `GET` | `/api/v1/documents/{document_id}/transcript` | Read transcript after successful processing | Proposed |
 
 No asynchronous job model or ingestion behavior has been implemented. The ingestion endpoint may need to return a job identifier if processing is asynchronous; settle this before implementation.
+
+## `POST /api/v1/retrieval/search`
+
+Embeds a text query with the configured Gemini embedding provider and retrieves the nearest vectors from the configured, pre-existing Pinecone index. It does not generate an answer or access segment text from PostgreSQL.
+
+Request JSON:
+
+```json
+{
+  "query": "What does the material say about retrieval?",
+  "top_k": 10,
+  "document_id": "d07962f8-c430-4b0b-b4bb-38ca63c1c083"
+}
+```
+
+`query` is required and must contain 1–10,000 non-whitespace characters. `top_k` is an integer from 1 through 100 and defaults to 10. `document_id` is an optional UUID filter against Pinecone's stored `document_id` metadata.
+
+The `200 OK` response contains the normalized query, selected `top_k`, and a `results` array in Pinecone similarity-score order. Each result includes the deterministic vector ID, document UUID, segment UUID, zero-based ordinal, similarity score, and available stored metadata. If there are no matches, the endpoint returns `200 OK` with an empty `results` array.
+
+Invalid input returns `422 Unprocessable Entity`. Missing or invalid provider/index configuration returns a generic `503 Service Unavailable`. Gemini or Pinecone request failures and malformed provider output return a generic `502 Bad Gateway`; provider details and credentials are not returned.
+
+This endpoint has no authentication or ownership authorization. It is not safe to expose publicly without suitable access controls. A Gemini API key and Pinecone API key/index are required at request time; the index must already exist and match `EMBEDDING_DIMENSIONS`. Tests replace the retrieval dependency with fakes and make no network calls.
 
 ## Implemented document metadata endpoints
 
