@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from hashlib import sha256
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -37,6 +38,7 @@ def make_record(
             document_id=DOCUMENT_ID,
             segment_id=SEGMENT_IDS[index],
             ordinal=index,
+            content_hash=sha256(f"segment {index}".encode("utf-8")).hexdigest(),
         ),
     )
 
@@ -154,6 +156,7 @@ def test_single_upsert_preserves_vector_and_metadata() -> None:
                     "document_id": str(DOCUMENT_ID),
                     "segment_id": str(SEGMENT_IDS[0]),
                     "ordinal": 0,
+                    "content_hash": sha256(b"segment 0").hexdigest(),
                 },
             }
         ]

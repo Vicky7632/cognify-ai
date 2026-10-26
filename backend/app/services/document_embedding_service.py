@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from math import isfinite
 from numbers import Real
 from typing import Protocol
@@ -21,6 +22,10 @@ class TextEmbeddingService(Protocol):
         """Return one validated vector per input text, preserving order."""
         ...
 
+    def close(self) -> None:
+        """Release provider resources."""
+        ...
+
 
 class DocumentEmbeddingNotFoundError(LookupError):
     """Raised when the requested document does not exist."""
@@ -32,6 +37,18 @@ class EmbeddedDocumentSegment:
     segment_id: UUID
     ordinal: int
     vector: tuple[float, ...]
+    content_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentSegmentEmbeddingInput:
+    document_id: UUID
+    segment_id: UUID
+    ordinal: int
+    text_content: str
+    page_number: int | None
+    start_seconds: float | None
+    end_seconds: float | None
 
 
 class DocumentEmbeddingService:
@@ -40,12 +57,25 @@ class DocumentEmbeddingService:
     def __init__(self, embedding_service: TextEmbeddingService) -> None:
         self._embedding_service = embedding_service
 
+    def close(self) -> None:
+        self._embedding_service.close()
+
     def embed_document(
         self,
         session: Session,
         document_id: UUID,
     ) -> tuple[EmbeddedDocumentSegment, ...]:
         """Embed ordered segments without persisting vectors or changing status."""
+        return self.embed_segments(
+            self.load_document_segments(session, document_id)
+        )
+
+    def load_document_segments(
+        self,
+        session: Session,
+        document_id: UUID,
+    ) -> tuple[DocumentSegmentEmbeddingInput, ...]:
+        """Load and validate segment inputs without performing provider calls."""
         if document_service.get_document(session, document_id) is None:
             raise DocumentEmbeddingNotFoundError("Document not found.")
 
@@ -58,9 +88,58 @@ class DocumentEmbeddingService:
                 "The document has no persisted segments to embed."
             )
 
+        inputs = tuple(
+            DocumentSegmentEmbeddingInput(
+                document_id=segment.document_id,
+                segment_id=segment.id,
+                ordinal=segment.ordinal,
+                text_content=segment.text_content,
+                page_number=segment.page_number,
+                start_seconds=segment.start_seconds,
+                end_seconds=segment.end_seconds,
+            )
+            for segment in segments
+        )
+        return self._validate_segments(inputs, document_id)
+
+    def embed_segments(
+        self,
+        segments: Sequence[DocumentSegmentEmbeddingInput],
+    ) -> tuple[EmbeddedDocumentSegment, ...]:
+        """Embed previously loaded segment values without an open DB session."""
+        if not segments:
+            raise EmbeddingInputError(
+                "The document has no persisted segments to embed."
+            )
+
+        document_id = segments[0].document_id
+        ordered_segments = self._validate_segments(segments, document_id)
+        texts = [segment.text_content for segment in ordered_segments]
+        vectors = self._embedding_service.embed_texts(texts)
+        self._validate_embedding_batch(vectors, len(ordered_segments))
+
+        return tuple(
+            EmbeddedDocumentSegment(
+                document_id=document_id,
+                segment_id=segment.segment_id,
+                ordinal=segment.ordinal,
+                vector=vector,
+                content_hash=sha256(
+                    segment.text_content.encode("utf-8")
+                ).hexdigest(),
+            )
+            for segment, vector in zip(ordered_segments, vectors, strict=True)
+        )
+
+    @staticmethod
+    def _validate_segments(
+        segments: Sequence[DocumentSegmentEmbeddingInput],
+        document_id: UUID,
+    ) -> tuple[DocumentSegmentEmbeddingInput, ...]:
         for segment in segments:
             if (
-                not isinstance(segment.id, UUID)
+                not isinstance(segment, DocumentSegmentEmbeddingInput)
+                or not isinstance(segment.segment_id, UUID)
                 or not isinstance(segment.document_id, UUID)
                 or segment.document_id != document_id
                 or isinstance(segment.ordinal, bool)
@@ -74,30 +153,19 @@ class DocumentEmbeddingService:
                     "The document contains malformed segment data."
                 )
 
-        ordered_segments = sorted(segments, key=lambda segment: segment.ordinal)
+        ordered_segments = tuple(
+            sorted(segments, key=lambda segment: segment.ordinal)
+        )
         if (
             len({segment.ordinal for segment in ordered_segments})
             != len(ordered_segments)
-            or len({segment.id for segment in ordered_segments})
+            or len({segment.segment_id for segment in ordered_segments})
             != len(ordered_segments)
         ):
             raise EmbeddingInputError(
                 "The document contains malformed segment data."
             )
-
-        texts = [segment.text_content for segment in ordered_segments]
-        vectors = self._embedding_service.embed_texts(texts)
-        self._validate_embedding_batch(vectors, len(ordered_segments))
-
-        return tuple(
-            EmbeddedDocumentSegment(
-                document_id=document_id,
-                segment_id=segment.id,
-                ordinal=segment.ordinal,
-                vector=vector,
-            )
-            for segment, vector in zip(ordered_segments, vectors, strict=True)
-        )
+        return ordered_segments
 
     @staticmethod
     def _validate_embedding_batch(

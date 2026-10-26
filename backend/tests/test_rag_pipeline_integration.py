@@ -4,6 +4,7 @@ These tests do not prove document upload automatically triggers processing or in
 """
 
 from collections.abc import Generator, Sequence
+from hashlib import sha256
 from numbers import Real
 from pathlib import Path
 from uuid import UUID
@@ -104,17 +105,27 @@ class FakeEmbeddingService:
 
 
 class FakeVectorStore:
-    def __init__(self, *, fail_upsert: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_upsert: bool = False,
+        persist_before_failure: int = 0,
+    ) -> None:
         self.records: dict[str, VectorRecord] = {}
         self.upsert_calls: list[tuple[VectorRecord, ...]] = []
         self.search_calls: list[tuple[tuple[float, ...], int, UUID | None]] = []
         self.search_override: tuple[VectorSearchResult, ...] | None = None
         self.fail_upsert = fail_upsert
+        self.persist_before_failure = persist_before_failure
 
     def upsert(self, records: Sequence[VectorRecord]) -> None:
         batch = tuple(records)
         self.upsert_calls.append(batch)
         if self.fail_upsert:
+            self.records.update(
+                (record.id, record)
+                for record in batch[: self.persist_before_failure]
+            )
             raise VectorStoreError("Fake vector storage failure.")
         self.records.update((record.id, record) for record in batch)
 
@@ -327,6 +338,111 @@ def test_vector_store_failure_does_not_report_pipeline_success(
             storage_service.embed_and_store(session, document_id)
 
     assert len(vector_store.upsert_calls) == 1
+
+
+def test_failed_reindex_abstains_for_stale_vectors_after_shorter_reprocessing(
+    session_factory: sessionmaker[Session],
+) -> None:
+    document_id = add_document_with_segments(session_factory)
+    embedding = FakeEmbeddingService()
+    vector_store = FakeVectorStore()
+    answer_provider = FakeGeminiAnswerProvider()
+    storage_service, answer_service = _make_pipeline(
+        embedding,
+        vector_store,
+        answer_provider,
+    )
+
+    with session_factory() as session:
+        storage_service.embed_and_store(session, document_id)
+
+    with session_factory() as session:
+        with session.begin():
+            first_segment = session.get(DocumentSegment, FIRST_SEGMENT_ID)
+            second_segment = session.get(DocumentSegment, SECOND_SEGMENT_ID)
+            assert first_segment is not None
+            assert second_segment is not None
+            first_segment.text_content = "Changed source after reprocessing."
+            session.delete(second_segment)
+
+    vector_store.fail_upsert = True
+    vector_store.persist_before_failure = 0
+    with session_factory() as session:
+        with pytest.raises(VectorStoreError):
+            storage_service.embed_and_store(session, document_id)
+
+    vector_store.fail_upsert = False
+    with session_factory() as session:
+        answer = answer_service.answer(
+            session,
+            "What does the source explain?",
+            top_k=2,
+            document_id=document_id,
+        )
+
+    assert answer.insufficient_evidence is True
+    assert answer.citations == ()
+    assert answer_provider.prompts == []
+    assert len(vector_store.records) == 2
+    assert sha256(
+        b"First persisted source."
+    ).hexdigest() == vector_store.records[
+        next(
+            record_id
+            for record_id, record in vector_store.records.items()
+            if record.metadata.segment_id == FIRST_SEGMENT_ID
+        )
+    ].metadata.content_hash
+
+
+def test_partial_upsert_excludes_stale_vector_from_grounded_answer(
+    session_factory: sessionmaker[Session],
+) -> None:
+    document_id = add_document_with_segments(session_factory)
+    embedding = FakeEmbeddingService()
+    vector_store = FakeVectorStore()
+    answer_provider = FakeGeminiAnswerProvider()
+    storage_service, answer_service = _make_pipeline(
+        embedding,
+        vector_store,
+        answer_provider,
+    )
+
+    with session_factory() as session:
+        storage_service.embed_and_store(session, document_id)
+
+    with session_factory() as session:
+        with session.begin():
+            first_segment = session.get(DocumentSegment, FIRST_SEGMENT_ID)
+            second_segment = session.get(DocumentSegment, SECOND_SEGMENT_ID)
+            assert first_segment is not None
+            assert second_segment is not None
+            first_segment.text_content = "Updated first source."
+            second_segment.text_content = "Updated second source."
+
+    vector_store.fail_upsert = True
+    vector_store.persist_before_failure = 1
+    with session_factory() as session:
+        with pytest.raises(VectorStoreError):
+            storage_service.embed_and_store(session, document_id)
+
+    vector_store.fail_upsert = False
+    with session_factory() as session:
+        answer = answer_service.answer(
+            session,
+            "What does the source explain?",
+            top_k=2,
+            document_id=document_id,
+        )
+
+    assert answer.insufficient_evidence is False
+    assert [citation.segment_id for citation in answer.citations] == [
+        FIRST_SEGMENT_ID
+    ]
+    assert len(answer_provider.prompts) == 1
+    assert [
+        source.text_content for source in answer_provider.prompts[0].sources
+    ] == ["Updated first source."]
 
 
 def test_answer_provider_failure_is_replaced_with_safe_error(

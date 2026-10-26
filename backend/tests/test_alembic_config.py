@@ -8,7 +8,7 @@ from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 
 from app.db.base import Base
-from app.models import Document
+from app.models import Document, DocumentProcessingJob
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +23,42 @@ def test_alembic_config_uses_backend_migration_directory() -> None:
 
 def test_document_model_is_in_alembic_target_metadata() -> None:
     assert Document.__table__ is Base.metadata.tables["documents"]
+    assert DocumentProcessingJob.__table__ is Base.metadata.tables[
+        "document_processing_jobs"
+    ]
+
+
+def test_processing_job_revision_creates_durable_queue_table() -> None:
+    revision_path = (
+        BACKEND_ROOT
+        / "alembic"
+        / "versions"
+        / "b31d20261026_add_document_processing_jobs.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "document_processing_jobs_revision",
+        revision_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    revision = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(revision)
+
+    output = StringIO()
+    migration_context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    with Operations.context(migration_context):
+        revision.upgrade()
+
+    sql = output.getvalue()
+    assert "CREATE TABLE document_processing_jobs" in sql
+    assert "document_id UUID NOT NULL" in sql
+    assert "UNIQUE (document_id)" in sql
+    assert "status IN ('queued', 'processing', 'completed', 'failed')" in sql
+    assert "available_at TIMESTAMP WITH TIME ZONE" in sql
+    assert "FOREIGN KEY(document_id) REFERENCES documents (id) ON DELETE CASCADE" in sql
 
 
 def test_initial_revision_generates_only_expected_documents_ddl() -> None:

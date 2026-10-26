@@ -18,6 +18,9 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.document import DocumentFileType, DocumentStatus
+from app.repositories.document_processing_job_repository import (
+    enqueue_document_processing,
+)
 from app.schemas.document import (
     DocumentCreateRequest,
     DocumentResponse,
@@ -119,6 +122,7 @@ async def upload_document(
                 detail="Unable to store uploaded document.",
             ) from error
 
+        transaction_body_completed = False
         try:
             with session.begin():
                 document = document_service.create_document(
@@ -128,22 +132,38 @@ async def upload_document(
                     storage_path=storage_key,
                     processing_status=DocumentStatus.UPLOADED,
                 )
+                enqueue_document_processing(session, document.id)
                 response = to_document_response(document)
+                transaction_body_completed = True
         except SQLAlchemyError:
-            try:
-                delete_stored_file(storage_key, settings.upload_root)
-            except FileStorageError:
-                logger.warning("Unable to clean up an upload after database failure.")
+            if transaction_body_completed:
+                logger.warning(
+                    "Upload transaction outcome is uncertain; retaining stored file."
+                )
+            else:
+                try:
+                    delete_stored_file(storage_key, settings.upload_root)
+                except FileStorageError:
+                    logger.warning(
+                        "Unable to clean up an upload after confirmed database rollback."
+                    )
             logger.error("Unable to persist uploaded document metadata.")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Unable to save uploaded document metadata.",
             ) from None
         except Exception:
-            try:
-                delete_stored_file(storage_key, settings.upload_root)
-            except FileStorageError:
-                logger.warning("Unable to clean up an upload after request failure.")
+            if transaction_body_completed:
+                logger.warning(
+                    "Upload transaction outcome is uncertain; retaining stored file."
+                )
+            else:
+                try:
+                    delete_stored_file(storage_key, settings.upload_root)
+                except FileStorageError:
+                    logger.warning(
+                        "Unable to clean up an upload after confirmed database rollback."
+                    )
             raise
         return response
     finally:
@@ -220,6 +240,20 @@ def update_document_status(
 ) -> DocumentResponse:
     try:
         with session.begin():
+            if request.status in (
+                DocumentStatus.PROCESSING,
+                DocumentStatus.COMPLETED,
+            ):
+                document = document_service.get_document(session, document_id)
+                if document is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Document not found",
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Document processing status is managed by the processing worker.",
+                )
             document = document_service.update_document_status(
                 session,
                 document_id,

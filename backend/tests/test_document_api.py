@@ -3,7 +3,7 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -12,7 +12,11 @@ from app.application import create_app
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.session import get_db
-from app.models.document import Document
+from app.models.document import Document, DocumentStatus
+from app.models.document_processing_job import (
+    DocumentProcessingJob,
+    DocumentProcessingJobStatus,
+)
 from app.models.document_segment import DocumentSegment
 
 
@@ -31,7 +35,7 @@ def client(tmp_path) -> Generator[TestClient, None, None]:
             event.listen(
                 session,
                 "after_commit",
-                lambda _: transaction_events.append("commit"),
+                record_commit,
             )
             event.listen(
                 session,
@@ -42,6 +46,18 @@ def client(tmp_path) -> Generator[TestClient, None, None]:
 
     transaction_events: list[str] = []
     failing_statements: set[str] = set()
+    failing_tables: set[str] = set()
+    simulate_ambiguous_commit = [False]
+
+    def record_commit(_session: Session) -> None:
+        transaction_events.append("commit")
+        if simulate_ambiguous_commit[0]:
+            simulate_ambiguous_commit[0] = False
+            raise OperationalError(
+                "COMMIT",
+                {},
+                Exception("synthetic commit acknowledgement failure"),
+            )
 
     def fail_selected_statement(
         connection,
@@ -52,7 +68,10 @@ def client(tmp_path) -> Generator[TestClient, None, None]:
         executemany: bool,
     ) -> None:
         sql_operation = statement.lstrip().split(maxsplit=1)[0].upper()
-        if sql_operation in failing_statements:
+        sql_upper = statement.upper()
+        if sql_operation in failing_statements or any(
+            f"INTO {table.upper()}" in sql_upper for table in failing_tables
+        ):
             raise OperationalError(
                 statement,
                 parameters,
@@ -70,6 +89,8 @@ def client(tmp_path) -> Generator[TestClient, None, None]:
     with TestClient(app, raise_server_exceptions=False) as test_client:
         app.state.transaction_events = transaction_events
         app.state.failing_statements = failing_statements
+        app.state.failing_tables = failing_tables
+        app.state.simulate_ambiguous_commit = simulate_ambiguous_commit
         app.state.session_factory = session_factory
         yield test_client
     app.dependency_overrides.clear()
@@ -139,8 +160,57 @@ def test_upload_pdf_stores_content_and_safe_metadata(client: TestClient) -> None
     assert files[0].read_bytes() == content
     with client.app.state.session_factory() as session:
         document = session.get(Document, UUID(body["id"]))
+        job = session.scalar(
+            select(DocumentProcessingJob).where(
+                DocumentProcessingJob.document_id == UUID(body["id"])
+            )
+        )
     assert document is not None
     assert document.storage_path == files[0].name
+    assert job is not None
+    assert job.status == DocumentProcessingJobStatus.QUEUED.value
+    assert body["processing_status"] == DocumentStatus.UPLOADED.value
+
+
+def test_upload_job_failure_rolls_back_document_and_removes_stored_file(
+    client: TestClient,
+) -> None:
+    client.app.state.failing_tables.add("document_processing_jobs")
+
+    response = client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("lesson.pdf", b"%PDF-1.7\ncontent", "application/pdf")},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Unable to save uploaded document metadata."
+    assert client.get("/api/v1/documents").json() == []
+    assert list(client.app.state.settings.upload_root.iterdir()) == []
+    assert client.app.state.transaction_events == ["rollback"]
+
+
+def test_ambiguous_commit_error_retains_file_referenced_by_committed_job(
+    client: TestClient,
+) -> None:
+    client.app.state.simulate_ambiguous_commit[0] = True
+
+    response = client.post(
+        "/api/v1/documents/upload",
+        files={"file": ("lesson.pdf", b"%PDF-1.7\ncontent", "application/pdf")},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Unable to save uploaded document metadata."
+    assert client.app.state.transaction_events == ["commit"]
+    stored_files = list(client.app.state.settings.upload_root.iterdir())
+    assert len(stored_files) == 1
+    with client.app.state.session_factory() as session:
+        document = session.scalar(select(Document))
+        job = session.scalar(select(DocumentProcessingJob))
+    assert document is not None
+    assert job is not None
+    assert document.storage_path == stored_files[0].name
+    assert job.document_id == document.id
 
 
 def test_upload_txt_preserves_unicode_filename_and_content(
@@ -518,15 +588,16 @@ def test_update_status_and_delete_document(client: TestClient) -> None:
         json={"status": "processing"},
     )
 
-    assert updated.status_code == 200
-    assert updated.json()["processing_status"] == "processing"
-    assert "storage_path" not in updated.json()
-    assert client.app.state.transaction_events == ["commit", "commit"]
+    assert updated.status_code == 409
+    assert updated.json()["detail"] == (
+        "Document processing status is managed by the processing worker."
+    )
+    assert client.app.state.transaction_events == ["commit", "rollback"]
 
     deleted = client.delete(f"/api/v1/documents/{document_id}")
 
     assert deleted.status_code == 204
-    assert client.app.state.transaction_events == ["commit", "commit", "commit"]
+    assert client.app.state.transaction_events == ["commit", "rollback", "commit"]
     assert client.get(f"/api/v1/documents/{document_id}").status_code == 404
 
 
@@ -544,37 +615,36 @@ def test_upload_lifecycle_transitions_persist_safe_failure_code(
         f"/api/v1/documents/{document_id}/status",
         json={"status": "processing"},
     )
-    assert started.status_code == 200
-    assert started.json()["processing_status"] == "processing"
-    assert started.json()["processing_error_code"] is None
+    assert started.status_code == 409
+    assert client.get(f"/api/v1/documents/{document_id}").json()[
+        "processing_status"
+    ] == "uploaded"
+    with client.app.state.session_factory() as session:
+        job = session.scalar(
+            select(DocumentProcessingJob).where(
+                DocumentProcessingJob.document_id == UUID(document_id)
+            )
+        )
+    assert job is not None
+    assert job.status == DocumentProcessingJobStatus.QUEUED.value
 
     failed = client.patch(
         f"/api/v1/documents/{document_id}/status",
         json={"status": "failed"},
     )
-    assert failed.status_code == 200
-    assert failed.json()["processing_status"] == "failed"
-    assert failed.json()["processing_error_code"] == "processing_failed"
-    assert "storage_path" not in failed.json()
-    assert "exception" not in failed.text.lower()
-
-    persisted_failure = client.get(f"/api/v1/documents/{document_id}")
-    assert persisted_failure.json()["processing_error_code"] == "processing_failed"
-
-    retried = client.patch(
-        f"/api/v1/documents/{document_id}/status",
-        json={"status": "processing"},
-    )
-    assert retried.status_code == 200
-    assert retried.json()["processing_error_code"] is None
+    assert failed.status_code == 409
 
     completed = client.patch(
         f"/api/v1/documents/{document_id}/status",
         json={"status": "completed"},
     )
-    assert completed.status_code == 200
-    assert completed.json()["processing_status"] == "completed"
-    assert completed.json()["processing_error_code"] is None
+    assert completed.status_code == 409
+    assert completed.json()["detail"] == (
+        "Document processing status is managed by the processing worker."
+    )
+    unchanged = client.get(f"/api/v1/documents/{document_id}")
+    assert unchanged.json()["processing_status"] == "uploaded"
+    assert unchanged.json()["processing_error_code"] is None
 
 
 @pytest.mark.parametrize(
@@ -596,18 +666,12 @@ def test_invalid_status_transitions_return_conflict(
         files={"file": ("lesson.pdf", b"%PDF-1.7\ncontent", "application/pdf")},
     )
     document_id = created.json()["id"]
-    if initial_status in ("processing", "completed"):
-        started = client.patch(
-            f"/api/v1/documents/{document_id}/status",
-            json={"status": "processing"},
-        )
-        assert started.status_code == 200
-    if initial_status == "completed":
-        finished = client.patch(
-            f"/api/v1/documents/{document_id}/status",
-            json={"status": "completed"},
-        )
-        assert finished.status_code == 200
+    if initial_status != "uploaded":
+        with client.app.state.session_factory() as session:
+            document = session.get(Document, UUID(document_id))
+            assert document is not None
+            document.processing_status = initial_status
+            session.commit()
 
     before = client.get(f"/api/v1/documents/{document_id}").json()
     response = client.patch(
@@ -704,7 +768,7 @@ def test_missing_mutation_rolls_back_transaction(client: TestClient) -> None:
         (
             "patch",
             "/api/v1/documents/00000000-0000-0000-0000-000000000001/status",
-            {"status": "completed"},
+            {"status": "failed"},
             "UPDATE",
         ),
         (
@@ -733,11 +797,11 @@ def test_database_operation_failure_rolls_back_and_hides_details(
             document_id,
         )
         if operation == "UPDATE":
-            started = client.patch(
-                f"/api/v1/documents/{document_id}/status",
-                json={"status": "processing"},
-            )
-            assert started.status_code == 200
+            with client.app.state.session_factory() as session:
+                document = session.get(Document, UUID(document_id))
+                assert document is not None
+                document.processing_status = "processing"
+                session.commit()
         client.app.state.transaction_events.clear()
 
     client.app.state.failing_statements.add(operation)

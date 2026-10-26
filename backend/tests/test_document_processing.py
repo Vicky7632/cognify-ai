@@ -110,7 +110,7 @@ def test_processing_result_rejects_empty_segments() -> None:
         ProcessingResult(segments=())
 
 
-def test_processor_contract_completes_only_with_valid_result(
+def test_processor_persists_segments_without_completing_document(
     session_factory: sessionmaker[Session],
 ) -> None:
     document_id = create_document(session_factory)
@@ -129,7 +129,7 @@ def test_processor_contract_completes_only_with_valid_result(
     assert processor.input.document_id == document_id
     assert processor.input.storage_key == "random-storage-key.pdf"
     document = get_document(session_factory, document_id)
-    assert document.processing_status == DocumentStatus.COMPLETED.value
+    assert document.processing_status == DocumentStatus.PROCESSING.value
     assert document.processing_error_code is None
     with session_factory() as session:
         segments = session.scalars(
@@ -339,7 +339,7 @@ def test_ineligible_lifecycle_state_is_rejected(
     assert get_document(session_factory, document_id).processing_status == "completed"
 
 
-def test_failed_document_can_be_retried_and_old_error_is_cleared(
+def test_failed_document_retry_persists_segments_without_completing(
     session_factory: sessionmaker[Session],
 ) -> None:
     document_id = create_document(
@@ -356,7 +356,7 @@ def test_failed_document_can_be_retried_and_old_error_is_cleared(
     process_document(session_factory, document_id, processor)
 
     document = get_document(session_factory, document_id)
-    assert document.processing_status == DocumentStatus.COMPLETED.value
+    assert document.processing_status == DocumentStatus.PROCESSING.value
     assert document.processing_error_code is None
     with session_factory() as session:
         segments = session.scalars(
@@ -367,7 +367,7 @@ def test_failed_document_can_be_retried_and_old_error_is_cleared(
     ]
 
 
-def test_stale_completion_does_not_overwrite_newer_failure(
+def test_stale_processing_does_not_overwrite_newer_failure(
     session_factory: sessionmaker[Session],
 ) -> None:
     document_id = create_document(session_factory)

@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Callable
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -51,9 +51,12 @@ def process_document(
     session_factory: SessionFactory,
     document_id: UUID,
     processor: DocumentProcessor,
+    *,
+    ensure_worker_lock: Callable[[], None] = lambda: None,
 ) -> ProcessingResult:
-    """Process synchronously; database transactions do not span processor work."""
+    """Extract and persist segments without completing the document."""
     try:
+        ensure_worker_lock()
         with session_factory() as session:
             with session.begin():
                 document = document_service.get_document(session, document_id)
@@ -84,6 +87,7 @@ def process_document(
             raise TypeError("Processor returned an invalid result.")
         segments = _document_segments(processing_input, result)
     except DocumentProcessingError as error:
+        ensure_worker_lock()
         _record_processing_failure(
             session_factory,
             document_id,
@@ -92,6 +96,7 @@ def process_document(
         raise DocumentProcessingFailedError(error.code) from None
     except Exception:
         logger.error("Document processor failed unexpectedly.")
+        ensure_worker_lock()
         _record_processing_failure(
             session_factory,
             document_id,
@@ -102,15 +107,14 @@ def process_document(
         ) from None
 
     try:
+        ensure_worker_lock()
         with session_factory() as session:
             with session.begin():
-                document = document_service.update_document_status(
-                    session,
-                    document_id,
-                    DocumentStatus.COMPLETED,
-                )
+                document = document_service.get_document(session, document_id)
                 if document is None:
                     raise DocumentNotFoundError("Document not found.")
+                if document.processing_status != DocumentStatus.PROCESSING.value:
+                    raise DocumentProcessingConflictError()
                 document_segment_repository.replace_document_segments(
                     session,
                     document_id,
@@ -119,7 +123,7 @@ def process_document(
     except InvalidDocumentTransitionError as error:
         raise DocumentProcessingConflictError() from error
     except SQLAlchemyError:
-        logger.error("Unable to complete document processing.")
+        logger.error("Unable to persist document processing results.")
         raise DocumentProcessingPersistenceError() from None
 
     return result
@@ -147,6 +151,10 @@ def _document_segments(
 
         persisted_segments.append(
             DocumentSegment(
+                id=uuid5(
+                    NAMESPACE_URL,
+                    f"cognify-ai:{processing_input.document_id}:segment:{ordinal}",
+                ),
                 document_id=processing_input.document_id,
                 ordinal=ordinal,
                 text_content=segment.text,

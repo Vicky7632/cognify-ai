@@ -1,5 +1,6 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from math import isfinite
 from numbers import Real
 from typing import Protocol
@@ -231,6 +232,11 @@ def _is_valid_source(
     ordinal = getattr(segment, "ordinal", None)
     page_number = getattr(segment, "page_number", None)
     text_content = getattr(segment, "text_content", None)
+    content_hash = (
+        match.metadata.get("content_hash")
+        if isinstance(match.metadata, Mapping)
+        else None
+    )
     filename = getattr(document, "original_filename", None)
     file_type = getattr(document, "file_type", None)
     valid_ordinal = (
@@ -249,12 +255,21 @@ def _is_valid_source(
         and ordinal == match.ordinal
         and isinstance(text_content, str)
         and bool(text_content.strip())
+        and isinstance(content_hash, str)
+        and _content_hash_matches(text_content, content_hash)
         and valid_page
         and isinstance(filename, str)
         and bool(filename.strip())
         and isinstance(file_type, str)
         and bool(file_type.strip())
     )
+
+
+def _content_hash_matches(text_content: str, content_hash: str) -> bool:
+    try:
+        return sha256(text_content.encode("utf-8")).hexdigest() == content_hash
+    except UnicodeEncodeError:
+        return False
 
 
 def _insufficient_evidence() -> GroundedAnswer:

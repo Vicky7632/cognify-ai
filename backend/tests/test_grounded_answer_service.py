@@ -1,4 +1,5 @@
 from collections.abc import Callable, Generator, Sequence
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -111,6 +112,7 @@ def match_for(
     *,
     ordinal: int = 5,
     score: float = 0.91,
+    text_content: str = "The source explains semantic retrieval.",
 ) -> VectorSearchResult:
     return VectorSearchResult(
         vector_id="stable-vector-id",
@@ -118,7 +120,10 @@ def match_for(
         segment_id=segment_id,
         ordinal=ordinal,
         score=score,
-        metadata={"document_id": str(document_id)},
+        metadata={
+            "document_id": str(document_id),
+            "content_hash": sha256(text_content.encode("utf-8")).hexdigest(),
+        },
     )
 
 
@@ -218,6 +223,50 @@ def test_invalid_persisted_page_number_is_not_cited(
     assert provider.prompts == []
 
 
+def test_stale_vector_for_changed_segment_is_excluded_from_context_and_citations(
+    session_factory: sessionmaker[Session],
+) -> None:
+    changed_content = "Updated source content after reprocessing."
+    document_id, _ = create_source(session_factory, text=changed_content)
+    stale_match = match_for(
+        document_id,
+        text_content="Original source content before reprocessing.",
+    )
+    provider = FakeAnswerProvider()
+    service, _ = make_service([stale_match], provider)
+
+    with session_factory() as session:
+        result = service.answer(session, "Question?")
+
+    assert result.insufficient_evidence is True
+    assert result.citations == ()
+    assert provider.prompts == []
+
+
+def test_legacy_vector_without_content_hash_is_not_verified(
+    session_factory: sessionmaker[Session],
+) -> None:
+    document_id, _ = create_source(session_factory)
+    match = match_for(document_id)
+    legacy_match = VectorSearchResult(
+        vector_id=match.vector_id,
+        document_id=match.document_id,
+        segment_id=match.segment_id,
+        ordinal=match.ordinal,
+        score=match.score,
+        metadata={"document_id": str(document_id)},
+    )
+    provider = FakeAnswerProvider()
+    service, _ = make_service([legacy_match], provider)
+
+    with session_factory() as session:
+        result = service.answer(session, "Question?")
+
+    assert result.insufficient_evidence is True
+    assert result.citations == ()
+    assert provider.prompts == []
+
+
 def test_database_source_document_must_match_retrieval_result(
     session_factory: sessionmaker[Session],
 ) -> None:
@@ -268,7 +317,13 @@ def test_citations_preserve_retrieval_order_and_use_stored_sources(
     provider = FakeAnswerProvider()
     service, _ = make_service(
         [
-            match_for(document_id, second_segment_id, ordinal=1, score=0.95),
+            match_for(
+                document_id,
+                second_segment_id,
+                ordinal=1,
+                score=0.95,
+                text_content="The second stored source.",
+            ),
             match_for(document_id, first_segment_id, ordinal=5, score=0.91),
         ],
         provider,
@@ -362,7 +417,10 @@ def test_document_injection_is_passed_only_as_untrusted_context(
     )
     document_id, _ = create_source(session_factory, text=hostile_text)
     provider = FakeAnswerProvider()
-    service, _ = make_service([match_for(document_id)], provider)
+    service, _ = make_service(
+        [match_for(document_id, text_content=hostile_text)],
+        provider,
+    )
 
     with session_factory() as session:
         result = service.answer(session, "How do citations work?")

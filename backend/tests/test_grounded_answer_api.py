@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from hashlib import sha256
 from uuid import UUID
 
 import pytest
@@ -109,14 +110,23 @@ def add_source(
             return document.id, segment.id
 
 
-def make_match(document_id: UUID, segment_id: UUID) -> VectorSearchResult:
+def make_match(
+    document_id: UUID,
+    segment_id: UUID,
+    *,
+    text_content: str = "The stored source describes retrieval.",
+) -> VectorSearchResult:
     return VectorSearchResult(
         vector_id="stable-vector-id",
         document_id=document_id,
         segment_id=segment_id,
         ordinal=0,
         score=0.92,
-        metadata={"document_id": str(document_id), "ordinal": 0},
+        metadata={
+            "document_id": str(document_id),
+            "ordinal": 0,
+            "content_hash": sha256(text_content.encode("utf-8")).hexdigest(),
+        },
     )
 
 
@@ -239,7 +249,11 @@ def test_provider_failure_is_safe_at_api_boundary(
         session_factory,
         text_content=document_secret,
     )
-    retrieval.matches = (make_match(document_id, segment_id),)
+    retrieval.matches = (make_match(
+        document_id,
+        segment_id,
+        text_content=document_secret,
+    ),)
     provider.failure = RuntimeError(
         "provider error with secret API key, "
         f"{query_secret}, {document_secret}"

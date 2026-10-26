@@ -96,7 +96,9 @@ Example success response (`201 Created`):
 
 Errors use FastAPI's `{"detail":"..."}` shape: invalid filename/content or missing/multiple files return `422`, unsupported extensions return `415`, oversized files return `413`, and storage/database failures return a generic `500`.
 
-Files are stored under a random server-generated key, never under the client filename. Writes are streamed in bounded chunks, and failed writes are cleaned up when possible. Database failure after storage triggers best-effort deletion of the new file. Because filesystem writes and PostgreSQL transactions are not atomic together, process termination or cleanup failure may leave an orphaned file.
+Files are stored under a random server-generated key, never under the client filename. Writes are streamed in bounded chunks, and failed writes are cleaned up when possible. The document row and a durable processing-job row are committed in one PostgreSQL transaction; extraction and provider calls happen later in the separate worker, not within the upload request. A confirmed rollback triggers best-effort deletion of the new file. If the transaction body completed but commit raises, the outcome is treated as ambiguous and the file is retained to avoid leaving committed document/job rows pointing to a deleted file. This may leave an orphaned file; filesystem/database reconciliation is future work.
+
+Run `python -m app.document_worker` from `backend/` as a separate process after applying all Alembic migrations. The worker recovers interrupted jobs, queues pre-existing uploaded documents without jobs, retries failures up to three times, and uses a PostgreSQL advisory lock to prevent multiple worker processes from consuming the same queue concurrently. A monitor and synchronous ownership checks guard job/status writes and stage boundaries. They narrow but do not eliminate the race between checking ownership and a database write or external request; lock ownership is not atomic with those operations. Loss detected during an operation aborts further stages and suppresses old-worker failure/retry writes, but an already in-flight provider call cannot be cancelled. PDF/TXT processing is implemented; media transcription is not, so accepted audio/video uploads currently fail processing safely. Vector metadata includes a SHA-256 fingerprint of the embedded segment text. Grounded answers exclude matches whose fingerprint is absent or does not match current PostgreSQL text; pre-existing vectors need reindexing before they can support citations. The answer/retrieval APIs remain unauthenticated and must not be exposed publicly without suitable access controls.
 
 ### `POST /api/v1/documents`
 
@@ -120,13 +122,13 @@ Allowed transitions are:
 
 | Current status | Allowed next status |
 |---|---|
-| `pending` | `processing` |
-| `uploaded` | `processing` |
-| `processing` | `completed`, `failed` |
-| `failed` | `processing` (retry) |
+| `pending` | `processing` (worker only) |
+| `uploaded` | `processing` (worker only) |
+| `processing` | `failed` (worker or status API); `completed` (worker only) |
+| `failed` | `processing` (worker retry only) |
 | `completed` | none |
 
-Transitions are conditionally updated against the current database status. Repeated or disallowed transitions return `409 Conflict`; unknown IDs return `404 Not Found`; unsupported status values return `422 Unprocessable Entity`. A failure transition records only the fixed safe code `processing_failed`; exception messages and stack traces are never stored or returned. Entering `processing` on retry clears the prior code. Successful response includes `processing_error_code` (`"processing_failed"` for failed documents, otherwise `null`).
+Transitions are conditionally updated against the current database status. The status API rejects attempts to set `processing` or `completed` with `409 Conflict`; only the worker may begin processing or mark a document complete after extraction, segment persistence, embedding, and Pinecone upsert all succeed. A client cannot restart a failed job by changing its document status. Other repeated or disallowed transitions return `409 Conflict`; unknown IDs return `404 Not Found`; unsupported status values return `422 Unprocessable Entity`. A failure transition records only the fixed safe code `processing_failed`; exception messages and stack traces are never stored or returned. Successful response includes `processing_error_code` (`"processing_failed"` for failed documents, otherwise `null`).
 
 ```json
 {
@@ -134,11 +136,11 @@ Transitions are conditionally updated against the current database status. Repea
 }
 ```
 
-This endpoint manages lifecycle state only. It does not invoke extraction, transcription, AI processing, workers, or queues; callers must only report `completed` after the represented processing has actually succeeded.
+This endpoint does not enqueue or invoke processing. Uploaded documents are queued atomically with their metadata by the upload endpoint. The status API does not accept `processing` or `completed` requests; the worker owns both transitions, preventing unqueued processing and premature completion.
 
 ### Processing service status
 
-Day 17 added an internal synchronous processor contract and orchestration service; Day 18 added a local PDF/TXT processor; Day 20 Step 3 persists extracted segments. PDF extraction creates one segment per non-empty page with 1-based page numbers. TXT decoding is strict UTF-8 with optional BOM support. Storage access uses the validated server-generated storage key under the configured upload root. Empty extraction and unsupported, missing, malformed, or unreadable inputs fail with the existing safe `processing_failed` code. The service persists ordered segments and marks completion in one transaction after extraction finishes. There is no public processing endpoint, transcription, worker, or queue; the lifecycle status endpoint does not invoke the processor. Apply the document-segment Alembic revision before using persistence against a database.
+Day 17 added an internal synchronous processor contract; Day 18 added a local PDF/TXT processor; Day 20 Step 3 persists extracted segments. Day 32 adds durable job orchestration: upload creates a PostgreSQL job, and a separate worker extracts and commits ordered segments, then releases the database session before Gemini embedding and Pinecone upsert. Only after upsert succeeds does it mark the document `completed`. PDF extraction creates one segment per non-empty page with 1-based page numbers. TXT decoding is strict UTF-8 with optional BOM support. Storage access uses the validated server-generated storage key under the configured upload root. Empty extraction and unsupported, missing, malformed, or unreadable inputs fail with the existing safe `processing_failed` code. Jobs retry up to three attempts; interrupted jobs are recovered at worker startup. Apply all Alembic revisions before using persistence and indexing against a database.
 
 ### `DELETE /api/v1/documents/{document_id}`
 

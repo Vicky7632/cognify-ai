@@ -202,6 +202,7 @@ def vector_record_for_segment(segment: EmbeddedDocumentSegment) -> VectorRecord:
             document_id=segment.document_id,
             segment_id=segment.segment_id,
             ordinal=segment.ordinal,
+            content_hash=segment.content_hash,
         ),
     )
 

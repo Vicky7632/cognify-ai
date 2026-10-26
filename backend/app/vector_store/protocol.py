@@ -23,6 +23,7 @@ class VectorMetadata:
     document_id: UUID
     segment_id: UUID
     ordinal: int
+    content_hash: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.document_id, UUID) or not isinstance(
@@ -35,13 +36,22 @@ class VectorMetadata:
             or self.ordinal < 0
         ):
             raise VectorStoreInputError("Vector metadata ordinal must be nonnegative.")
+        if self.content_hash is not None and (
+            not isinstance(self.content_hash, str)
+            or len(self.content_hash) != 64
+            or any(character not in "0123456789abcdef" for character in self.content_hash)
+        ):
+            raise VectorStoreInputError("Vector content hash is malformed.")
 
     def as_dict(self) -> dict[str, str | int]:
-        return {
+        metadata: dict[str, str | int] = {
             "document_id": str(self.document_id),
             "segment_id": str(self.segment_id),
             "ordinal": self.ordinal,
         }
+        if self.content_hash is not None:
+            metadata["content_hash"] = self.content_hash
+        return metadata
 
 
 @dataclass(frozen=True, slots=True)
