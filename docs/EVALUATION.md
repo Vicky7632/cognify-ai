@@ -1,6 +1,6 @@
 # Evaluation plan
 
-> **Status:** Evaluation protocol to implement. No evaluation set, benchmark result, or performance claim is provided by this document.
+> **Status:** Evaluation protocol documented; offline Recall@k and MRR@k calculation helpers are implemented. No evaluation set, benchmark result, or performance claim is provided by this document.
 
 ## Goals
 
