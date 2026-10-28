@@ -49,3 +49,5 @@ Exercise malformed/unsupported/oversized files, empty extraction/transcripts, pa
 ## Limitations
 
 Offline datasets may not represent real users or adversarial inputs. Similarity scores are not calibrated evidence of truth. LLM judging alone is not a reliable ground truth. Retrieval, citations, and abstention can reduce unsupported responses but cannot eliminate hallucinations. Evaluation does not replace security, privacy, licensing, or operational review.
+
+- Offline Recall@k and MRR@k helpers are implemented and covered by 8 passing tests.
