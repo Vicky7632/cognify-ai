@@ -49,3 +49,7 @@ Exercise malformed/unsupported/oversized files, empty extraction/transcripts, pa
 ## Limitations
 
 Offline datasets may not represent real users or adversarial inputs. Similarity scores are not calibrated evidence of truth. LLM judging alone is not a reliable ground truth. Retrieval, citations, and abstention can reduce unsupported responses but cannot eliminate hallucinations. Evaluation does not replace security, privacy, licensing, or operational review.
+
+## Dataset versioning checklist
+
+Before publishing an evaluation run, record the dataset version, split, annotation revision, and a stable query ID for every example. Keep held-out test examples separate from development data, and record the code revision and metric configuration with each run. Never report benchmark scores until a dataset has been created and the evaluation has actually been executed.
