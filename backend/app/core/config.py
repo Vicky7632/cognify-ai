@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         validation_alias="EMBEDDING_MODEL",
     )
     embedding_dimensions: int = Field(
-        default=3072,
+        default=1024,
         validation_alias="EMBEDDING_DIMENSIONS",
     )
     llm_provider: str | None = Field(

@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence
+from math import hypot
 from numbers import Real
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -49,7 +50,9 @@ def test_gemini_provider_embeds_single_text_with_model_and_dimensions() -> None:
         expected_dimensions=2,
     )
 
-    assert service.embed_text("one text") == (0.25, 0.75)
+    assert service.embed_text("one text") == pytest.approx(
+        (1 / (10**0.5), 3 / (10**0.5))
+    )
     call = client.models.embed_content.call_args.kwargs
     assert call["model"] == GEMINI_EMBEDDING_MODEL
     assert call["contents"] == ["one text"]
@@ -62,7 +65,9 @@ def test_gemini_provider_batches_and_preserves_input_order() -> None:
     def response_for(contents: list[str]) -> SimpleNamespace:
         return SimpleNamespace(
             embeddings=[
-                SimpleNamespace(values=[float(text.split("-")[1])])
+                SimpleNamespace(
+                    values=[float(text.split("-")[1]) + 1, 1.0]
+                )
                 for text in contents
             ]
         )
@@ -70,10 +75,14 @@ def test_gemini_provider_batches_and_preserves_input_order() -> None:
     client = fake_client(response_for)
     provider = GeminiEmbeddingProvider(
         api_key="test-key",
-        output_dimensions=1,
+        output_dimensions=2,
         client=client,
     )
-    service = EmbeddingService(provider, model=GEMINI_EMBEDDING_MODEL)
+    service = EmbeddingService(
+        provider,
+        model=GEMINI_EMBEDDING_MODEL,
+        expected_dimensions=2,
+    )
 
     vectors = service.embed_texts(texts)
 
@@ -81,7 +90,12 @@ def test_gemini_provider_batches_and_preserves_input_order() -> None:
         list(texts[:GEMINI_MAX_BATCH_SIZE]),
         list(texts[GEMINI_MAX_BATCH_SIZE:]),
     ]
-    assert vectors == tuple((float(index),) for index in range(len(texts)))
+    assert [hypot(*vector) for vector in vectors] == pytest.approx(
+        (1.0,) * len(texts)
+    )
+    assert [vector[0] for vector in vectors] == sorted(
+        vector[0] for vector in vectors
+    )
 
 
 def test_gemini_factory_initializes_sdk_client_without_leaking_key() -> None:
@@ -170,6 +184,79 @@ def test_gemini_provider_rejects_configured_dimension_mismatch() -> None:
         service.embed_text("text")
 
 
+def test_1024_dimensional_embeddings_are_requested_validated_and_l2_normalized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = [3.0] * 1024
+    client = fake_client(
+        lambda _contents: SimpleNamespace(
+            embeddings=[SimpleNamespace(values=values)]
+        )
+    )
+    monkeypatch.setattr(
+        "app.services.gemini_embedding_provider.genai.Client",
+        lambda *, api_key: client,
+    )
+    settings = Settings(
+        gemini_api_key="test-key",
+        embedding_dimensions=1024,
+        _env_file=None,
+    )
+    provider = create_gemini_embedding_provider(settings)
+    service = EmbeddingService(
+        provider,
+        model=GEMINI_EMBEDDING_MODEL,
+        expected_dimensions=1024,
+    )
+
+    vector = service.embed_text("text")
+
+    assert len(vector) == 1024
+    assert hypot(*vector) == pytest.approx(1.0)
+    assert vector == pytest.approx((1 / 32,) * 1024)
+    assert client.models.embed_content.call_args.kwargs[
+        "config"
+    ].output_dimensionality == 1024
+
+
+def test_gemini_3072_dimensional_embeddings_are_not_renormalized() -> None:
+    values = [2.0] * 3072
+    client = fake_client(
+        lambda _contents: SimpleNamespace(
+            embeddings=[SimpleNamespace(values=values)]
+        )
+    )
+    provider = GeminiEmbeddingProvider(
+        api_key="test-key",
+        output_dimensions=3072,
+        client=client,
+    )
+
+    vector = provider.embed_batch(
+        ("text",),
+        model=GEMINI_EMBEDDING_MODEL,
+    )[0]
+
+    assert vector == values
+    assert hypot(*vector) != pytest.approx(1.0)
+
+
+def test_gemini_non_default_dimension_rejects_zero_magnitude_vector() -> None:
+    client = fake_client(
+        lambda _contents: SimpleNamespace(
+            embeddings=[SimpleNamespace(values=[0.0, 0.0])]
+        )
+    )
+    provider = GeminiEmbeddingProvider(
+        api_key="test-key",
+        output_dimensions=2,
+        client=client,
+    )
+
+    with pytest.raises(EmbeddingOutputError, match="zero or invalid vector"):
+        provider.embed_batch(("text",), model=GEMINI_EMBEDDING_MODEL)
+
+
 def test_gemini_provider_rejects_batches_over_declared_limit() -> None:
     client = Mock()
     provider = GeminiEmbeddingProvider(
@@ -208,7 +295,7 @@ def test_response_vectors_retain_numeric_values_for_service_validation() -> None
     )
     provider = GeminiEmbeddingProvider(
         api_key="test-key",
-        output_dimensions=2,
+        output_dimensions=3072,
         client=client,
     )
 

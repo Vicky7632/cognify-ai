@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from math import hypot, isfinite
 from numbers import Real
 from typing import Protocol
 
@@ -101,12 +102,43 @@ class GeminiEmbeddingProvider:
                 raise EmbeddingOutputError(
                     "The Gemini embedding provider returned a malformed response."
                 )
-            vectors.append(values)
+            vectors.append(
+                values
+                if self._output_dimensions == 3072
+                else _normalize_embedding(values)
+            )
         return tuple(vectors)
 
     def close(self) -> None:
         """Release the SDK client's underlying HTTP resources."""
         self._client.close()
+
+
+def _normalize_embedding(values: Sequence[Real]) -> tuple[float, ...]:
+    numeric_values: list[float] = []
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, Real):
+            raise EmbeddingOutputError(
+                "The Gemini embedding provider returned a non-numeric value."
+            )
+        try:
+            numeric_value = float(value)
+        except (OverflowError, ValueError):
+            raise EmbeddingOutputError(
+                "The Gemini embedding provider returned an invalid value."
+            ) from None
+        if not isfinite(numeric_value):
+            raise EmbeddingOutputError(
+                "The Gemini embedding provider returned a non-finite value."
+            )
+        numeric_values.append(numeric_value)
+
+    magnitude = hypot(*numeric_values)
+    if not isfinite(magnitude) or magnitude == 0:
+        raise EmbeddingOutputError(
+            "The Gemini embedding provider returned a zero or invalid vector."
+        )
+    return tuple(value / magnitude for value in numeric_values)
 
 
 def create_gemini_embedding_provider(settings: Settings) -> GeminiEmbeddingProvider:

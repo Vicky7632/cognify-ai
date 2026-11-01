@@ -35,7 +35,7 @@ def test_defaults_without_environment_or_dotenv(monkeypatch) -> None:
     assert settings.database_url is None
     assert settings.embedding_provider == "gemini"
     assert settings.embedding_model == "gemini-embedding-001"
-    assert settings.embedding_dimensions == 3072
+    assert settings.embedding_dimensions == 1024
     assert settings.llm_provider is None
     assert settings.llm_model is None
     assert settings.gemini_api_key is None
