@@ -58,6 +58,64 @@ class _PineconeClient(Protocol):
         ...
 
 
+class _PineconeVectorStoreError(VectorStoreError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None,
+        category: str,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.category = category
+
+
+class _PineconeConfigurationError(VectorStoreConfigurationError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None,
+        category: str,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.category = category
+
+
+def _safe_provider_diagnostics(error: Exception) -> tuple[int | None, str]:
+    try:
+        raw_status_code = getattr(error, "status_code", None)
+    except Exception:
+        raw_status_code = None
+    status_code = (
+        raw_status_code
+        if isinstance(raw_status_code, int)
+        and not isinstance(raw_status_code, bool)
+        and 100 <= raw_status_code <= 599
+        else None
+    )
+    type_name = type(error).__name__.lower()
+    if status_code in (401, 403):
+        category = "authentication"
+    elif status_code == 404 or "notfound" in type_name:
+        category = "not_found"
+    elif status_code in (408, 504) or "timeout" in type_name:
+        category = "timeout"
+    elif status_code == 429 or "ratelimit" in type_name:
+        category = "rate_limited"
+    elif status_code in (400, 422):
+        category = "invalid_request"
+    elif status_code is not None and status_code >= 500:
+        category = "server_error"
+    elif "connection" in type_name or "network" in type_name:
+        category = "network"
+    else:
+        category = "provider_error"
+    return status_code, category
+
+
 class PineconeVectorStore:
     """Pinecone implementation of the provider-neutral vector store contract."""
 
@@ -114,11 +172,14 @@ class PineconeVectorStore:
         except VectorStoreConfigurationError:
             self._close_after_initialization_failure()
             raise
-        except Exception:
+        except Exception as error:
             self._close_after_initialization_failure()
-            raise VectorStoreConfigurationError(
-                "Pinecone index could not be found or verified."
-            ) from None
+            status_code, category = _safe_provider_diagnostics(error)
+            raise _PineconeConfigurationError(
+                "Pinecone index could not be found or verified.",
+                status_code=status_code,
+                category=category,
+            ) from error
 
         self._expected_dimensions = expected_dimensions
         self._batch_size = batch_size
@@ -138,8 +199,13 @@ class PineconeVectorStore:
             ]
             try:
                 self._index.upsert(vectors=vectors, show_progress=False)
-            except Exception:
-                raise VectorStoreError("Pinecone vector upsert failed.") from None
+            except Exception as error:
+                status_code, category = _safe_provider_diagnostics(error)
+                raise _PineconeVectorStoreError(
+                    "Pinecone vector upsert failed.",
+                    status_code=status_code,
+                    category=category,
+                ) from error
 
     def search(
         self,
@@ -169,8 +235,13 @@ class PineconeVectorStore:
                 filter=metadata_filter,
                 include_metadata=True,
             )
-        except Exception:
-            raise VectorStoreError("Pinecone similarity search failed.") from None
+        except Exception as error:
+            status_code, category = _safe_provider_diagnostics(error)
+            raise _PineconeVectorStoreError(
+                "Pinecone similarity search failed.",
+                status_code=status_code,
+                category=category,
+            ) from error
         return _parse_search_response(response)
 
     def close(self) -> None:

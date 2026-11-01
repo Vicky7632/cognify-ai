@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from pinecone import ApiError
 
 from app.core.config import Settings
 from app.vector_store.pinecone_adapter import (
@@ -480,3 +481,64 @@ def test_search_provider_failure_is_safe() -> None:
 
     assert str(error.value) == "Pinecone similarity search failed."
     assert "test-key" not in str(error.value)
+
+
+@pytest.mark.parametrize("operation", ("upsert", "search"))
+def test_sdk_api_error_preserves_cause_and_safe_diagnostics(
+    operation: str,
+) -> None:
+    failure = ApiError(
+        "provider message containing secret-value",
+        400,
+        body={"error": {"message": "sensitive response body"}},
+        headers={"Authorization": "******"},
+        error_code="sensitive-error-code",
+        request_id="sensitive-request-id",
+    )
+    client = FakeClient(index=FakeIndex(failure=failure))
+    store, _ = make_store(client)
+
+    with pytest.raises(VectorStoreError) as error:
+        if operation == "upsert":
+            store.upsert([make_record(0)])
+        else:
+            store.search((0.1, 0.2, 0.3), top_k=1)
+
+    assert str(error.value) == (
+        "Pinecone vector upsert failed."
+        if operation == "upsert"
+        else "Pinecone similarity search failed."
+    )
+    assert error.value.__cause__ is failure
+    assert error.value.status_code == 400
+    assert error.value.category == "invalid_request"
+    for private_value in (
+        "provider message",
+        "secret-value",
+        "sensitive response body",
+        "sensitive-header",
+        "sensitive-error-code",
+        "sensitive-request-id",
+    ):
+        assert private_value not in str(error.value)
+
+
+def test_sdk_initialization_error_preserves_cause_and_safe_diagnostics() -> None:
+    failure = ApiError(
+        "provider message containing secret-value",
+        401,
+        body={"error": {"message": "sensitive response body"}},
+        headers={"Authorization": "******"},
+        error_code="sensitive-error-code",
+        request_id="sensitive-request-id",
+    )
+    client = FakeClient(describe_failure=failure)
+
+    with pytest.raises(VectorStoreConfigurationError) as error:
+        make_store(client)
+
+    assert error.value.__cause__ is failure
+    assert error.value.status_code == 401
+    assert error.value.category == "authentication"
+    assert str(error.value) == "Pinecone index could not be found or verified."
+    assert "secret-value" not in str(error.value)
