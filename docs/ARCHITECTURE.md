@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status:** Target architecture. The backend currently implements a minimal FastAPI health endpoint, settings, lazy SQLAlchemy session foundation, a `Document` ORM model, and Alembic migrations. The broader integrations and multimodal RAG components described here remain planned.
+> **Status:** Target architecture with implemented backend components. The service includes PDF/TXT ingestion, durable document processing, Gemini embedding integration, a Pinecone vector-store adapter, retrieval, grounded answers, and offline evaluation. Media transcription, frontend features, and live Pinecone/Gemini provider verification remain incomplete.
 
 ## Goals and boundaries
 
@@ -34,7 +34,7 @@ flowchart LR
     Retrieval --> PG
 ```
 
-The diagram expresses intended boundaries only. Pinecone is the planned vector store, not a required paid development dependency. HTTPX may be used for outbound HTTP integrations where useful; no provider/model is selected.
+The diagram expresses intended boundaries; implemented paths are described in [the data flow](./DATA_FLOW.md). Pinecone is the implemented vector-store adapter, but requires a separately provisioned index and configured credentials for live use. HTTPX may be used for outbound HTTP integrations where useful.
 
 ## Component responsibilities
 
@@ -59,7 +59,7 @@ The exact metadata schema, chunking algorithm, overlap, embedding dimensions/ver
 
 ## Configuration and external dependencies
 
-`.env.example` lists planned variable names with placeholders only. It does not establish validated runtime settings or imply credentials/models are available. Confirm exact settings, provider SDKs, PostgreSQL setup, Pinecone index configuration and cost, local model requirements, FFmpeg availability, model licenses, and resource needs during implementation/evaluation.
+`.env.example` contains placeholders only. Pinecone configuration uses `PINECONE_API_KEY`, `PINECONE_INDEX`, `PINECONE_UPSERT_BATCH_SIZE`, and `EMBEDDING_DIMENSIONS`. The adapter connects by existing index name, checks its dimensions, and does not create or modify a remote index; a separate host/region setting is not required by the current name-based SDK flow. The SDK and adapter are covered with fake-client tests, but no live Pinecone request or index has been verified. Credentials must be supplied locally or through a secret manager. Confirm PostgreSQL setup, Pinecone index configuration and cost, local model requirements, FFmpeg availability, model licenses, and resource needs before production use.
 
 Prefer low-cost development choices, but compare privacy, licensing, quality, operational cost, and latency before selecting model/provider combinations. Keep service startup errors explicit when a required integration is unavailable.
 

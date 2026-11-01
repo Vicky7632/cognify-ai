@@ -1,6 +1,6 @@
 # Data flow
 
-> **Status:** Upload, document persistence, lifecycle management, an internal synchronous processor/orchestrator, local PDF/TXT extraction, and extracted-segment persistence are implemented. Extraction runs outside transactions; segment persistence and completion share one transaction. The processing path is not exposed by an HTTP endpoint. Audio/video transcription and downstream indexing remain proposed.
+> **Status:** Upload, durable document processing, local PDF/TXT extraction, PostgreSQL segment persistence, embedding, and Pinecone upsert are implemented. The worker persists segments before indexing and marks processing complete only after successful upsert. Pinecone and Gemini behavior has not been verified with live credentials; audio/video transcription remains unimplemented.
 
 ## Ingestion
 
@@ -25,11 +25,11 @@ flowchart TD
     Processor -. Future: MP3 / WAV .-> Audio[Local Whisper-compatible transcription]
     Processor -. Future: MP4 .-> ExtractAudio[FFmpeg extracts audio]
     ExtractAudio -. Future .-> Audio
-    Normalize -. Future ingestion .-> Chunk[Chunk content and retain provenance]
-    Chunk --> Embed[Create embeddings]
+    Normalize --> Segments[Persist ordered source segments]
+    Segments --> Embed[Create embeddings]
     Embed --> Persist[Pinecone vector upsert]
-    Persist --> CompletedWithIndex[Future: record completion after indexing]
-    CompletedWithIndex --> Result[Future ingestion status and source identifier]
+    Persist --> CompletedWithIndex[Mark complete after indexing succeeds]
+    CompletedWithIndex --> Result[Document status and source identifier]
     InternalComplete --> Result[Internal processing outcome]
     InternalFailed --> Result
     CompletedWithIndex --> Result
@@ -40,9 +40,9 @@ flowchart TD
 1. Validate supported formats (PDF, TXT, MP3, WAV, MP4), actual content where practical, and configured size limits; do not trust only filename or client MIME type.
 2. Create document/processing metadata in PostgreSQL and persist the original through the separate file storage abstraction.
 3. PDF/TXT extraction is implemented by the local processor: PDF output is page-separated with 1-based provenance, and TXT uses strict UTF-8 decoding with optional BOM support. Transcribing MP3/WAV with a selected local model and using FFmpeg to extract MP4 audio remain future work.
-4. Normalize output into a shared representation, retain source ID/type/location, and chunk while preserving page/time ranges where available.
-5. Generate embeddings through an abstraction and upsert vectors plus minimal searchable metadata into Pinecone. Keep relational state in PostgreSQL and originals in file storage.
-6. The internal processor persists extracted segments in PostgreSQL; no endpoint invokes it. Persistence and completion commit atomically after extraction. Continue to make retry, partial failure, cleanup, idempotency, and cross-store consistency explicit before adding indexing. Do not silently index empty content or claim full success when a required step failed.
+4. Normalize extraction output into ordered segments with source identity and provenance. Semantic chunking is not implemented; PDF extraction currently preserves page-level segments and TXT extraction produces text segments.
+5. Generate embeddings through the existing embedding abstraction and upsert vectors plus minimal searchable metadata into the configured existing Pinecone index. The adapter verifies index dimensions, uses stable document/segment-derived vector IDs, and batches upserts. Keep relational state in PostgreSQL and originals in file storage.
+6. The document worker persists extracted segments in PostgreSQL before embedding and upsert; its database session is closed during provider calls. Processing completes only after successful indexing. Retries and partial failures are explicit, but PostgreSQL and Pinecone cannot commit atomically; partial upserts can leave stale vectors. Do not silently index empty content or claim full success when a required step failed.
 
 Temporary-file lifecycle, deduplication, idempotency, and retry behavior must be defined during implementation.
 
