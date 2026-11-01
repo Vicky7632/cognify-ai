@@ -1,0 +1,54 @@
+{
+  "dataset_version": "1.0.0",
+  "schema_version": "1.0",
+  "chunks": [
+    {
+      "chunk_id": "chunk-study-breaks",
+      "text": "Short study breaks can help learners maintain focus during long study sessions."
+    },
+    {
+      "chunk_id": "chunk-break-timing",
+      "text": "A practical study routine is to take a five-minute break after each twenty-five-minute focus period."
+    },
+    {
+      "chunk_id": "chunk-active-recall",
+      "text": "Active recall means retrieving information from memory instead of only rereading notes."
+    },
+    {
+      "chunk_id": "chunk-spaced-review",
+      "text": "Spaced review revisits information over increasing intervals to support long-term retention."
+    }
+  ],
+  "examples": [
+    {
+      "query_id": "study-break-duration",
+      "query": "How long is the break in the example study routine?",
+      "relevant_chunk_ids": ["chunk-break-timing"],
+      "sufficient_evidence": true,
+      "reference_answer": "The example routine uses a five-minute break after each twenty-five-minute focus period."
+    },
+    {
+      "query_id": "study-break-benefit",
+      "query": "How can short breaks help during long study sessions?",
+      "relevant_chunk_ids": ["chunk-study-breaks"],
+      "sufficient_evidence": true,
+      "key_facts": ["Short breaks can help learners maintain focus."]
+    },
+    {
+      "query_id": "study-techniques-comparison",
+      "query": "How do active recall and spaced review differ?",
+      "relevant_chunk_ids": ["chunk-active-recall", "chunk-spaced-review"],
+      "sufficient_evidence": true,
+      "key_facts": [
+        "Active recall retrieves information from memory rather than relying only on rereading.",
+        "Spaced review revisits information over increasing intervals."
+      ]
+    },
+    {
+      "query_id": "unsupported-exam-date",
+      "query": "On what date is the final exam scheduled?",
+      "relevant_chunk_ids": [],
+      "sufficient_evidence": false
+    }
+  ]
+}

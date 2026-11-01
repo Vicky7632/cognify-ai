@@ -1,6 +1,6 @@
 # Evaluation plan
 
-> **Status:** Evaluation protocol documented; offline Recall@k and MRR@k calculation helpers are implemented. No evaluation set, benchmark result, or performance claim is provided by this document.
+> **Status:** Evaluation protocol documented; offline Recall@k and MRR@k calculation helpers and a small versioned synthetic dataset are implemented. No benchmark result or performance claim is provided by this document.
 
 ## Goals
 
@@ -53,3 +53,5 @@ Offline datasets may not represent real users or adversarial inputs. Similarity 
 ## Dataset versioning checklist
 
 Before publishing an evaluation run, record the dataset version, split, annotation revision, and a stable query ID for every example. Keep held-out test examples separate from development data, and record the code revision and metric configuration with each run. Never report benchmark scores until a dataset has been created and the evaluation has actually been executed.
+
+The initial synthetic offline dataset is `backend/data/retrieval-evaluation/v1.json` (`dataset_version` `1.0.0`, `schema_version` `1.0`). It contains a small chunk corpus and answerable/unanswerable queries, including multi-chunk evidence. Bump the dataset version when examples or annotations change; increment the schema version when the JSON structure or validation rules change. Validate the bundled dataset with `.\.venv\Scripts\python.exe -m pytest backend\tests\test_retrieval_evaluation_dataset.py` from the repository root. Tests validate loading and malformed data only; they do not call providers or report retrieval scores.
