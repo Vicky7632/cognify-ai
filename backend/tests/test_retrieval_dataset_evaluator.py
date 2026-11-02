@@ -1,4 +1,6 @@
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -88,8 +90,51 @@ def test_runner_loads_versioned_dataset_and_returns_deterministic_metrics() -> N
     assert first.k == 2
     assert first.answerable_query_count == 3
     assert first.total_query_count == 4
+    assert first.dataset_version == "1.0.0"
+    assert first.schema_version == "1.0"
+    assert first.unanswerable_query_count == 1
     assert first.recall_at_k == 1.0
     assert first.mean_reciprocal_rank_at_k == pytest.approx(5 / 6)
+
+
+def test_result_metadata_comes_from_loaded_dataset(tmp_path: Path) -> None:
+    payload = json.loads(DEFAULT_DATASET_PATH.read_text(encoding="utf-8"))
+    payload["dataset_version"] = "2.3.4"
+    dataset_path = tmp_path / "dataset.json"
+    dataset_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_retrieval_dataset_evaluation(
+        {"study-break-duration": ["chunk-break-timing"]},
+        k=1,
+        dataset_path=dataset_path,
+    )
+
+    assert result.dataset_version == "2.3.4"
+    assert result.schema_version == payload["schema_version"]
+
+
+def test_serialized_result_is_json_compatible_and_deterministic() -> None:
+    rankings = {
+        "study-break-duration": ["chunk-break-timing"],
+        "study-break-benefit": ["chunk-study-breaks"],
+        "study-techniques-comparison": ["chunk-active-recall"],
+    }
+
+    first = run_retrieval_dataset_evaluation(rankings, k=1).to_dict()
+    second = run_retrieval_dataset_evaluation(rankings, k=1).to_dict()
+
+    assert first == second
+    assert json.loads(json.dumps(first)) == first
+    assert first == {
+        "dataset_version": "1.0.0",
+        "schema_version": "1.0",
+        "k": 1,
+        "total_query_count": 4,
+        "answerable_query_count": 3,
+        "unanswerable_query_count": 1,
+        "recall_at_k": 1.0,
+        "mean_reciprocal_rank_at_k": pytest.approx(1.0),
+    }
 
 
 def test_empty_rankings_and_empty_results_are_scored_as_misses() -> None:
@@ -103,6 +148,7 @@ def test_empty_rankings_and_empty_results_are_scored_as_misses() -> None:
 
     assert result.answerable_query_count == 3
     assert result.total_query_count == 4
+    assert result.unanswerable_query_count == 1
     assert result.recall_at_k == 0.0
     assert result.mean_reciprocal_rank_at_k == 0.0
 

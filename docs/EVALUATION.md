@@ -54,7 +54,22 @@ Offline datasets may not represent real users or adversarial inputs. Similarity 
 
 Before publishing an evaluation run, record the dataset version, split, annotation revision, and a stable query ID for every example. Keep held-out test examples separate from development data, and record the code revision and metric configuration with each run. Never report benchmark scores until a dataset has been created and the evaluation has actually been executed.
 
-The initial synthetic offline dataset is `backend/data/retrieval-evaluation/v1.json` (`dataset_version` `1.0.0`, `schema_version` `1.0`). It contains a small chunk corpus and answerable/unanswerable queries, including multi-chunk evidence. An answerable example must identify at least one relevant chunk; an unanswerable example must have none. Bump the dataset version when examples or annotations change; increment the schema version when the JSON structure or validation rules change. Validate the bundled dataset with `.\.venv\Scripts\python.exe -m pytest backend\tests\test_retrieval_evaluation_dataset.py` from the repository root. `run_retrieval_dataset_evaluation` in `app.services.retrieval_dataset_evaluator` loads the versioned dataset (or a supplied dataset path) and scores caller-supplied ranked chunk IDs by query ID using the existing Recall@k and MRR@k metrics. Missing rankings and empty result lists count as misses; unanswerable examples are excluded. Unknown query/chunk IDs, malformed rankings, and datasets with no answerable queries are rejected with `ValueError`. It is offline and does not call providers. For a smaller step, `evaluate_retrieval_dataset` accepts an already-loaded dataset.
+The initial synthetic offline dataset is `backend/data/retrieval-evaluation/v1.json` (`dataset_version` `1.0.0`, `schema_version` `1.0`). It contains a small chunk corpus and answerable/unanswerable queries, including multi-chunk evidence. An answerable example must identify at least one relevant chunk; an unanswerable example must have none. Bump the dataset version when examples or annotations change; increment the schema version when the JSON structure or validation rules change. Validate the bundled dataset with `.\.venv\Scripts\python.exe -m pytest backend\tests\test_retrieval_evaluation_dataset.py` from the repository root. `run_retrieval_dataset_evaluation` in `app.services.retrieval_dataset_evaluator` loads the versioned dataset (or a supplied dataset path) and scores caller-supplied ranked chunk IDs by query ID using the existing Recall@k and MRR@k metrics; it does not execute retrieval. Missing rankings and empty result lists count as misses; unanswerable examples are excluded. Unknown query/chunk IDs, malformed rankings, and datasets with no answerable queries are rejected with `ValueError`. It is offline and does not call providers. For a smaller step, `evaluate_retrieval_dataset` accepts an already-loaded dataset.
+
+`RetrievalDatasetEvaluation.to_dict()` returns deterministic JSON-compatible reporting data: dataset and schema versions, `k`, total/answerable/unanswerable query counts, Recall@k, and MRR@k. The unanswerable count is total queries minus answerable queries. For example, with the bundled dataset and rankings that retrieve relevant evidence for each answerable query at rank 1:
+
+```json
+{
+  "dataset_version": "1.0.0",
+  "schema_version": "1.0",
+  "k": 1,
+  "total_query_count": 4,
+  "answerable_query_count": 3,
+  "unanswerable_query_count": 1,
+  "recall_at_k": 1.0,
+  "mean_reciprocal_rank_at_k": 1.0
+}
+```
 
 `evaluate_citations` in `app.services.citation_evaluation` consumes the dataset, per-query available retrieved chunk IDs, and existing `GroundedAnswer` objects (reading citation IDs from their `segment_id` fields). Per-query citation validity is `unique cited IDs present in that query's available retrieved IDs / unique cited IDs`; aggregate validity is the micro-average `total valid unique cited IDs / total unique cited IDs`. Duplicate citations count once. With no cited IDs, validity is `null` because its denominator is zero. Citation coverage is `answerable queries with at least one valid citation / all answerable queries`; unanswerable queries are excluded. If there are no answerable queries, coverage is `null`. Counts are returned with both metrics. ID validity means only that an ID was retrieved; it does not establish that the source supports an answer claim or assess citation location/entailment. Those require separate labeled review.
 

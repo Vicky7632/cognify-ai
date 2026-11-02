@@ -15,11 +15,27 @@ from app.services.retrieval_evaluation_dataset import (
 
 @dataclass(frozen=True, slots=True)
 class RetrievalDatasetEvaluation:
+    dataset_version: str
+    schema_version: str
     k: int
-    answerable_query_count: int
     total_query_count: int
+    answerable_query_count: int
+    unanswerable_query_count: int
     recall_at_k: float
     mean_reciprocal_rank_at_k: float
+
+    def to_dict(self) -> dict[str, object]:
+        """Return deterministic JSON-compatible evaluation results."""
+        return {
+            "dataset_version": self.dataset_version,
+            "schema_version": self.schema_version,
+            "k": self.k,
+            "total_query_count": self.total_query_count,
+            "answerable_query_count": self.answerable_query_count,
+            "unanswerable_query_count": self.unanswerable_query_count,
+            "recall_at_k": self.recall_at_k,
+            "mean_reciprocal_rank_at_k": self.mean_reciprocal_rank_at_k,
+        }
 
 
 def evaluate_retrieval_dataset(
@@ -86,9 +102,12 @@ def evaluate_retrieval_dataset(
     relevant = tuple(example.relevant_chunk_ids for example in answerable)
 
     return RetrievalDatasetEvaluation(
+        dataset_version=dataset.dataset_version,
+        schema_version=dataset.schema_version,
         k=k,
-        answerable_query_count=len(answerable),
         total_query_count=len(dataset.examples),
+        answerable_query_count=len(answerable),
+        unanswerable_query_count=len(dataset.examples) - len(answerable),
         recall_at_k=recall_at_k(rankings, relevant, k=k),
         mean_reciprocal_rank_at_k=mean_reciprocal_rank_at_k(
             rankings,
