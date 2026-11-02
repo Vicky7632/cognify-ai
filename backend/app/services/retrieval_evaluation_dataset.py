@@ -153,6 +153,10 @@ def _parse_example(value: object, index: int) -> RetrievalEvaluationExample:
         raise RetrievalEvaluationDatasetError(
             f"{label}.sufficient_evidence must be a boolean."
         )
+    if sufficient and not relevant_value:
+        raise RetrievalEvaluationDatasetError(
+            f"{label} must include relevant chunks when evidence is sufficient."
+        )
 
     reference_answer = example.get("reference_answer")
     if reference_answer is not None:

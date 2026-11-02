@@ -58,3 +58,34 @@ def test_rejects_malformed_example(tmp_path: Path) -> None:
 
     with pytest.raises(RetrievalEvaluationDatasetError, match="must be a boolean"):
         load_retrieval_evaluation_dataset(_write_dataset(tmp_path, payload))
+
+
+def test_rejects_answerable_example_without_relevant_chunks(tmp_path: Path) -> None:
+    payload = json.loads(DEFAULT_DATASET_PATH.read_text(encoding="utf-8"))
+    payload["examples"][0]["relevant_chunk_ids"] = []
+
+    with pytest.raises(
+        RetrievalEvaluationDatasetError,
+        match="must include relevant chunks when evidence is sufficient",
+    ):
+        load_retrieval_evaluation_dataset(_write_dataset(tmp_path, payload))
+
+
+def test_accepts_answerable_example_with_relevant_chunks(tmp_path: Path) -> None:
+    payload = json.loads(DEFAULT_DATASET_PATH.read_text(encoding="utf-8"))
+
+    dataset = load_retrieval_evaluation_dataset(_write_dataset(tmp_path, payload))
+
+    assert dataset.examples[0].sufficient_evidence is True
+    assert dataset.examples[0].relevant_chunk_ids == ("chunk-break-timing",)
+
+
+def test_accepts_unanswerable_example_without_relevant_chunks(tmp_path: Path) -> None:
+    payload = json.loads(DEFAULT_DATASET_PATH.read_text(encoding="utf-8"))
+
+    dataset = load_retrieval_evaluation_dataset(_write_dataset(tmp_path, payload))
+    unanswerable = next(
+        example for example in dataset.examples if not example.sufficient_evidence
+    )
+
+    assert unanswerable.relevant_chunk_ids == ()
