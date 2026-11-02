@@ -48,6 +48,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="PINECONE_INDEX",
     )
+    pinecone_host: str | None = Field(
+        default=None,
+        validation_alias="PINECONE_HOST",
+    )
+    pinecone_namespace: str = Field(
+        default="cognify",
+        validation_alias="PINECONE_NAMESPACE",
+    )
     pinecone_upsert_batch_size: int = Field(
         default=100,
         validation_alias="PINECONE_UPSERT_BATCH_SIZE",
@@ -88,6 +96,20 @@ class Settings(BaseSettings):
     def validate_pinecone_upsert_batch_size(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Pinecone upsert batch size must be greater than zero.")
+        return value
+
+    @field_validator("pinecone_namespace")
+    @classmethod
+    def validate_pinecone_namespace(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Pinecone namespace must not be empty.")
+        return value
+
+    @field_validator("pinecone_host", mode="before")
+    @classmethod
+    def normalize_optional_pinecone_host(cls, value: str | None) -> str | None:
+        if isinstance(value, str) and not value.strip():
+            return None
         return value
 
     model_config = SettingsConfigDict(

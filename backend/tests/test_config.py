@@ -22,6 +22,8 @@ def clear_application_environment(monkeypatch) -> None:
         "GEMINI_API_KEY",
         "PINECONE_API_KEY",
         "PINECONE_INDEX",
+        "PINECONE_HOST",
+        "PINECONE_NAMESPACE",
         "PINECONE_UPSERT_BATCH_SIZE",
     ):
         monkeypatch.delenv(variable, raising=False)
@@ -41,6 +43,8 @@ def test_defaults_without_environment_or_dotenv(monkeypatch) -> None:
     assert settings.gemini_api_key is None
     assert settings.pinecone_api_key is None
     assert settings.pinecone_index is None
+    assert settings.pinecone_host is None
+    assert settings.pinecone_namespace == "cognify"
     assert settings.pinecone_upsert_batch_size == 100
     assert settings.max_upload_size_bytes == 25 * 1024 * 1024
     assert settings.upload_root == PROJECT_ROOT / "storage" / "uploads"
@@ -61,6 +65,17 @@ def test_rejects_nonpositive_pinecone_batch_size() -> None:
         Settings(pinecone_upsert_batch_size=0, _env_file=None)
 
 
+def test_rejects_empty_pinecone_namespace() -> None:
+    with pytest.raises(ValidationError, match="Pinecone namespace"):
+        Settings(pinecone_namespace=" ", _env_file=None)
+
+
+def test_empty_optional_pinecone_host_is_treated_as_unconfigured() -> None:
+    settings = Settings(pinecone_host=" ", _env_file=None)
+
+    assert settings.pinecone_host is None
+
+
 def test_resolves_relative_upload_root_from_repository_root() -> None:
     settings = Settings(upload_root=Path("storage/uploads"), _env_file=None)
 
@@ -78,6 +93,11 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("PINECONE_API_KEY", "pinecone-test-key")
     monkeypatch.setenv("PINECONE_INDEX", "cognify-test-index")
+    monkeypatch.setenv(
+        "PINECONE_HOST",
+        "https://cognify-test-index.svc.pinecone.io",
+    )
+    monkeypatch.setenv("PINECONE_NAMESPACE", "test-namespace")
     monkeypatch.setenv("PINECONE_UPSERT_BATCH_SIZE", "25")
     monkeypatch.setenv(
         "DATABASE_URL", "postgresql+psycopg://test:test@localhost/test_db"
@@ -97,6 +117,8 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
     assert settings.pinecone_api_key is not None
     assert settings.pinecone_api_key.get_secret_value() == "pinecone-test-key"
     assert settings.pinecone_index == "cognify-test-index"
+    assert settings.pinecone_host == "https://cognify-test-index.svc.pinecone.io"
+    assert settings.pinecone_namespace == "test-namespace"
     assert settings.pinecone_upsert_batch_size == 25
     assert settings.database_url == "postgresql+psycopg://test:test@localhost/test_db"
 
