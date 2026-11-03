@@ -48,6 +48,7 @@ class QueryEvaluationInput:
 class OfflineRAGEvaluationInput:
     queries: tuple[QueryEvaluationInput, ...]
     k: int = 10
+    chunk_id_to_segment_id: Mapping[str, UUID] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,24 @@ class QueryClaimEvaluation:
 
 
 @dataclass(frozen=True, slots=True)
+class CitationSourceConsistencyQueryResult:
+    query_id: str
+    annotated_segment_ids: tuple[UUID, ...]
+    answer_segment_ids: tuple[UUID, ...]
+    missing_answer_segment_ids: tuple[UUID, ...]
+    unannotated_answer_segment_ids: tuple[UUID, ...]
+    unmapped_answer_segment_ids: tuple[UUID, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CitationSourceConsistencyEvaluation:
+    query_results: tuple[CitationSourceConsistencyQueryResult, ...]
+    checked_query_count: int
+    mismatched_query_count: int
+    unmapped_citation_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class OfflineRAGEvaluationResult:
     dataset_version: str
     retrieval: RetrievalDatasetEvaluation
@@ -75,6 +94,7 @@ class OfflineRAGEvaluationResult:
     claim_support_by_query: tuple[QueryClaimEvaluation, ...]
     abstention: AbstentionEvaluation
     missing_inputs: MissingEvaluationInputs
+    citation_source_consistency: CitationSourceConsistencyEvaluation | None = None
 
     def to_dict(self) -> dict[str, object]:
         """Return deterministic JSON-compatible result data."""
@@ -92,6 +112,10 @@ def evaluate_offline_rag(
     """Load the versioned dataset and orchestrate its offline evaluators."""
     dataset = load_retrieval_evaluation_dataset(dataset_path)
     queries = _validate_query_inputs(evaluation_input, dataset)
+    chunk_id_to_segment_id = _validate_source_id_mapping(
+        evaluation_input.chunk_id_to_segment_id,
+        dataset,
+    )
     input_by_id = {query.query_id: query for query in queries}
     ordered_queries = tuple(
         input_by_id[example.query_id]
@@ -156,6 +180,14 @@ def evaluate_offline_rag(
         if query.decision is not None
     )
     abstention = evaluate_abstentions(dataset, predictions)
+    citation_source_consistency = (
+        _evaluate_citation_source_consistency(
+            ordered_queries,
+            chunk_id_to_segment_id,
+        )
+        if chunk_id_to_segment_id is not None
+        else None
+    )
 
     missing_query_ids = tuple(
         example.query_id
@@ -197,6 +229,7 @@ def evaluate_offline_rag(
                 "decision",
             ),
         ),
+        citation_source_consistency=citation_source_consistency,
     )
 
 
@@ -289,6 +322,100 @@ def _validate_chunk_ids(chunk_ids: tuple[ChunkId, ...], label: str) -> None:
         raise ValueError(f"{label} must contain hashable chunk IDs.") from error
     if any(not isinstance(chunk_id, (str, UUID)) for chunk_id in chunk_ids):
         raise ValueError(f"{label} must contain string or UUID chunk IDs.")
+
+
+def _validate_source_id_mapping(
+    mapping: Mapping[str, UUID] | None,
+    dataset: RetrievalEvaluationDataset,
+) -> dict[str, UUID] | None:
+    if mapping is None:
+        return None
+    if not isinstance(mapping, Mapping):
+        raise ValueError("chunk_id_to_segment_id must be a mapping.")
+    if any(not isinstance(chunk_id, str) for chunk_id in mapping):
+        raise ValueError("Source ID mapping keys must be dataset chunk ID strings.")
+
+    known_chunk_ids = {chunk.chunk_id for chunk in dataset.chunks}
+    unknown_chunk_ids = set(mapping) - known_chunk_ids
+    if unknown_chunk_ids:
+        raise ValueError(
+            "Source ID mapping contains unknown chunk IDs: "
+            + ", ".join(sorted(unknown_chunk_ids))
+        )
+    if any(not isinstance(segment_id, UUID) for segment_id in mapping.values()):
+        raise ValueError("Source ID mapping values must be segment UUIDs.")
+    if len(set(mapping.values())) != len(mapping):
+        raise ValueError("Source ID mapping must not contain duplicate segment UUIDs.")
+    return dict(mapping)
+
+
+def _evaluate_citation_source_consistency(
+    queries: Sequence[QueryEvaluationInput],
+    chunk_id_to_segment_id: Mapping[str, UUID],
+) -> CitationSourceConsistencyEvaluation:
+    results: list[CitationSourceConsistencyQueryResult] = []
+    for query in queries:
+        if query.claims is None:
+            continue
+
+        annotated_ids: set[UUID] = set()
+        for claim in query.claims:
+            for chunk_id in claim.actual_cited_chunk_ids:
+                if not isinstance(chunk_id, str) or chunk_id not in chunk_id_to_segment_id:
+                    raise ValueError(
+                        f"Claim source ID for query {query.query_id} is missing "
+                        "from chunk_id_to_segment_id."
+                    )
+                annotated_ids.add(chunk_id_to_segment_id[chunk_id])
+
+        answer_ids: set[UUID] = set()
+        if query.answer is not None:
+            for citation in query.answer.citations:
+                segment_id = getattr(citation, "segment_id", None)
+                if not isinstance(segment_id, UUID):
+                    raise ValueError(
+                        f"Citation for query {query.query_id} must have a segment UUID."
+                    )
+                answer_ids.add(segment_id)
+
+        mapped_segment_ids = set(chunk_id_to_segment_id.values())
+        missing_answer_ids = annotated_ids - answer_ids
+        unannotated_answer_ids = answer_ids - annotated_ids
+        unmapped_answer_ids = answer_ids - mapped_segment_ids
+        results.append(
+            CitationSourceConsistencyQueryResult(
+                query_id=query.query_id,
+                annotated_segment_ids=tuple(sorted(annotated_ids, key=str)),
+                answer_segment_ids=tuple(sorted(answer_ids, key=str)),
+                missing_answer_segment_ids=tuple(
+                    sorted(missing_answer_ids, key=str)
+                ),
+                unannotated_answer_segment_ids=tuple(
+                    sorted(unannotated_answer_ids, key=str)
+                ),
+                unmapped_answer_segment_ids=tuple(
+                    sorted(unmapped_answer_ids, key=str)
+                ),
+            )
+        )
+
+    mismatched_query_count = sum(
+        bool(
+            result.missing_answer_segment_ids
+            or result.unannotated_answer_segment_ids
+            or result.unmapped_answer_segment_ids
+        )
+        for result in results
+    )
+    unmapped_citation_count = sum(
+        len(result.unmapped_answer_segment_ids) for result in results
+    )
+    return CitationSourceConsistencyEvaluation(
+        query_results=tuple(results),
+        checked_query_count=len(results),
+        mismatched_query_count=mismatched_query_count,
+        unmapped_citation_count=unmapped_citation_count,
+    )
 
 
 def _missing_component_inputs(

@@ -11,6 +11,7 @@ from app.services.grounded_answer_service import (
 )
 from app.services.offline_rag_evaluation import (
     OfflineRAGEvaluationInput,
+    OfflineRAGEvaluationResult,
     QueryEvaluationInput,
     evaluate_offline_rag,
 )
@@ -29,6 +30,43 @@ def _citation(segment_id: UUID) -> GroundedCitation:
         original_filename="synthetic.txt",
         file_type="txt",
         score=0.9,
+    )
+
+
+def _claim(
+    actual_cited_chunk_ids: tuple[str, ...] = ("chunk-break-timing",),
+) -> AnswerClaim:
+    return AnswerClaim(
+        claim_id="claim-one",
+        text="A synthetic claim.",
+        expected_supporting_chunk_ids=("chunk-break-timing",),
+        actual_cited_chunk_ids=actual_cited_chunk_ids,
+    )
+
+
+def _evaluate_source_consistency(
+    mapping: dict[str, UUID],
+    *,
+    citation_ids: tuple[UUID, ...],
+    actual_cited_chunk_ids: tuple[str, ...] = ("chunk-break-timing",),
+) -> OfflineRAGEvaluationResult:
+    return evaluate_offline_rag(
+        OfflineRAGEvaluationInput(
+            queries=(
+                QueryEvaluationInput(
+                    query_id="study-break-duration",
+                    answer=GroundedAnswer(
+                        answer="A synthetic answer.",
+                        citations=tuple(
+                            _citation(segment_id) for segment_id in citation_ids
+                        ),
+                        insufficient_evidence=False,
+                    ),
+                    claims=(_claim(actual_cited_chunk_ids),),
+                ),
+            ),
+            chunk_id_to_segment_id=mapping,
+        )
     )
 
 
@@ -92,6 +130,7 @@ def test_orchestrates_all_evaluators_and_serializes_deterministically() -> None:
     )
 
     assert result.dataset_version == "1.0.0"
+    assert result.citation_source_consistency is None
     assert result.retrieval.recall_at_k == 1.0
     assert result.retrieval.mean_reciprocal_rank_at_k == pytest.approx(5 / 6)
     assert result.citations.citation_validity == 0.5
@@ -202,3 +241,160 @@ def test_rejects_invalid_retrieval_ids_and_k() -> None:
         )
     with pytest.raises(ValueError, match="k must be a positive integer"):
         evaluate_offline_rag(OfflineRAGEvaluationInput(queries=(), k=0))
+
+
+def test_source_consistency_matches_mapped_claim_sources_to_answer_citations() -> None:
+    result = _evaluate_source_consistency(
+        {"chunk-break-timing": VALID_SEGMENT_ID},
+        citation_ids=(VALID_SEGMENT_ID,),
+    )
+
+    consistency = result.citation_source_consistency
+    assert consistency is not None
+    assert consistency.checked_query_count == 1
+    assert consistency.mismatched_query_count == 0
+    assert consistency.unmapped_citation_count == 0
+    assert consistency.query_results[0].annotated_segment_ids == (VALID_SEGMENT_ID,)
+    assert consistency.query_results[0].answer_segment_ids == (VALID_SEGMENT_ID,)
+
+
+def test_source_consistency_reports_claim_source_missing_from_answer() -> None:
+    result = _evaluate_source_consistency(
+        {"chunk-break-timing": VALID_SEGMENT_ID},
+        citation_ids=(UNKNOWN_SEGMENT_ID,),
+    )
+
+    consistency = result.citation_source_consistency
+    assert consistency is not None
+    query = consistency.query_results[0]
+    assert query.missing_answer_segment_ids == (VALID_SEGMENT_ID,)
+    assert query.unannotated_answer_segment_ids == (UNKNOWN_SEGMENT_ID,)
+    assert query.unmapped_answer_segment_ids == (UNKNOWN_SEGMENT_ID,)
+    assert consistency.mismatched_query_count == 1
+
+
+def test_source_consistency_requires_mapping_for_claim_source_ids() -> None:
+    with pytest.raises(ValueError, match="missing from chunk_id_to_segment_id"):
+        _evaluate_source_consistency(
+            {"chunk-study-breaks": VALID_SEGMENT_ID},
+            citation_ids=(),
+        )
+
+
+def test_source_consistency_rejects_unknown_mapping_keys() -> None:
+    with pytest.raises(ValueError, match="unknown chunk IDs"):
+        _evaluate_source_consistency(
+            {
+                "chunk-break-timing": VALID_SEGMENT_ID,
+                "not-a-dataset-chunk": UNKNOWN_SEGMENT_ID,
+            },
+            citation_ids=(VALID_SEGMENT_ID,),
+        )
+
+
+def test_source_consistency_rejects_duplicate_segment_uuid_targets() -> None:
+    with pytest.raises(ValueError, match="duplicate segment UUIDs"):
+        _evaluate_source_consistency(
+            {
+                "chunk-break-timing": VALID_SEGMENT_ID,
+                "chunk-study-breaks": VALID_SEGMENT_ID,
+            },
+            citation_ids=(VALID_SEGMENT_ID,),
+        )
+
+
+def test_source_consistency_reports_unmapped_answer_citation_uuid() -> None:
+    result = _evaluate_source_consistency(
+        {"chunk-break-timing": VALID_SEGMENT_ID},
+        citation_ids=(VALID_SEGMENT_ID, UNKNOWN_SEGMENT_ID),
+    )
+
+    consistency = result.citation_source_consistency
+    assert consistency is not None
+    query = consistency.query_results[0]
+    assert query.unmapped_answer_segment_ids == (UNKNOWN_SEGMENT_ID,)
+    assert consistency.unmapped_citation_count == 1
+
+
+def test_source_consistency_deduplicates_citations_and_serializes_deterministically() -> None:
+    mapping = {"chunk-break-timing": VALID_SEGMENT_ID}
+    first = _evaluate_source_consistency(
+        mapping,
+        citation_ids=(VALID_SEGMENT_ID, VALID_SEGMENT_ID),
+    ).to_dict()
+    second = _evaluate_source_consistency(
+        mapping,
+        citation_ids=(VALID_SEGMENT_ID, VALID_SEGMENT_ID),
+    ).to_dict()
+
+    assert first == second
+    assert first["citation_source_consistency"]["query_results"][0][
+        "answer_segment_ids"
+    ] == [str(VALID_SEGMENT_ID)]
+
+
+def test_source_consistency_rejects_non_uuid_mapping_values() -> None:
+    with pytest.raises(ValueError, match="values must be segment UUIDs"):
+        _evaluate_source_consistency(
+            {"chunk-break-timing": "not-a-uuid"},
+            citation_ids=(VALID_SEGMENT_ID,),
+        )
+
+
+def test_source_consistency_rejects_non_mapping_source_id_mapping() -> None:
+    with pytest.raises(ValueError, match="chunk_id_to_segment_id must be a mapping"):
+        evaluate_offline_rag(
+            OfflineRAGEvaluationInput(
+                queries=(),
+                chunk_id_to_segment_id=[],
+            )
+        )
+
+
+def test_source_consistency_rejects_non_string_mapping_keys() -> None:
+    with pytest.raises(ValueError, match="keys must be dataset chunk ID strings"):
+        evaluate_offline_rag(
+            OfflineRAGEvaluationInput(
+                queries=(),
+                chunk_id_to_segment_id={1: VALID_SEGMENT_ID},
+            )
+        )
+
+
+def test_source_consistency_rejects_non_uuid_answer_citation_segment_id() -> None:
+    with pytest.raises(ValueError, match="must have a segment UUID"):
+        _evaluate_source_consistency(
+            {"chunk-break-timing": VALID_SEGMENT_ID},
+            citation_ids=("not-a-uuid",),
+        )
+
+
+def test_source_consistency_reports_mapped_unannotated_citation() -> None:
+    result = _evaluate_source_consistency(
+        {"chunk-break-timing": VALID_SEGMENT_ID},
+        citation_ids=(VALID_SEGMENT_ID,),
+        actual_cited_chunk_ids=(),
+    )
+
+    consistency = result.citation_source_consistency
+    assert consistency is not None
+    query = consistency.query_results[0]
+    assert query.unannotated_answer_segment_ids == (VALID_SEGMENT_ID,)
+    assert query.unmapped_answer_segment_ids == ()
+    assert consistency.mismatched_query_count == 1
+
+
+def test_source_consistency_deduplicates_duplicate_claim_source_ids() -> None:
+    result = _evaluate_source_consistency(
+        {"chunk-break-timing": VALID_SEGMENT_ID},
+        citation_ids=(),
+        actual_cited_chunk_ids=("chunk-break-timing", "chunk-break-timing"),
+    )
+
+    consistency = result.citation_source_consistency
+    assert consistency is not None
+    query = consistency.query_results[0]
+    assert consistency.checked_query_count == 1
+    assert consistency.mismatched_query_count == 1
+    assert query.annotated_segment_ids == (VALID_SEGMENT_ID,)
+    assert query.missing_answer_segment_ids == (VALID_SEGMENT_ID,)
