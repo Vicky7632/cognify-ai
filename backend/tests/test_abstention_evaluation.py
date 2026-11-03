@@ -78,6 +78,32 @@ def test_unnecessary_abstention_is_not_answer_coverage() -> None:
     )
 
 
+def test_abstention_precision_counts_correct_and_unnecessary_abstentions() -> None:
+    dataset = load_retrieval_evaluation_dataset()
+    result = evaluate_abstentions(
+        dataset,
+        [
+            AbstentionPrediction(
+                "study-break-duration",
+                AnswerDecision.ABSTAINED,
+            ),
+            AbstentionPrediction(
+                "unsupported-exam-date",
+                AnswerDecision.ABSTAINED,
+            ),
+        ],
+    )
+
+    assert result.abstention_precision == 0.5
+    assert result.abstention_precision_numerator == 1
+    assert result.abstention_precision_denominator == 2
+    assert (
+        result.query_results[0].outcome
+        is QueryOutcome.UNNECESSARY_ABSTENTION
+    )
+    assert result.query_results[-1].outcome is QueryOutcome.CORRECT_ABSTENTION
+
+
 def test_missing_prediction_is_explicit_and_never_a_correct_abstention() -> None:
     dataset = load_retrieval_evaluation_dataset()
     result = evaluate_abstentions(dataset, [])

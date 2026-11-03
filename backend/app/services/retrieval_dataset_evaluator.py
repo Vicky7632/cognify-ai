@@ -21,8 +21,8 @@ class RetrievalDatasetEvaluation:
     total_query_count: int
     answerable_query_count: int
     unanswerable_query_count: int
-    recall_at_k: float
-    mean_reciprocal_rank_at_k: float
+    recall_at_k: float | None
+    mean_reciprocal_rank_at_k: float | None
 
     def to_dict(self) -> dict[str, object]:
         """Return deterministic JSON-compatible evaluation results."""
@@ -92,14 +92,23 @@ def evaluate_retrieval_dataset(
     answerable = tuple(
         example for example in dataset.examples if example.sufficient_evidence
     )
-    if not answerable:
-        raise ValueError("At least one answerable query is required.")
-
-    rankings = tuple(
-        ranked_chunk_ids.get(example.query_id, ())
-        for example in answerable
-    )
-    relevant = tuple(example.relevant_chunk_ids for example in answerable)
+    if answerable:
+        rankings = tuple(
+            ranked_chunk_ids.get(example.query_id, ())
+            for example in answerable
+        )
+        relevant = tuple(example.relevant_chunk_ids for example in answerable)
+        recall = recall_at_k(rankings, relevant, k=k)
+        mean_reciprocal_rank = mean_reciprocal_rank_at_k(
+            rankings,
+            relevant,
+            k=k,
+        )
+    else:
+        if isinstance(k, bool) or not isinstance(k, int) or k < 1:
+            raise ValueError("k must be a positive integer.")
+        recall = None
+        mean_reciprocal_rank = None
 
     return RetrievalDatasetEvaluation(
         dataset_version=dataset.dataset_version,
@@ -108,12 +117,8 @@ def evaluate_retrieval_dataset(
         total_query_count=len(dataset.examples),
         answerable_query_count=len(answerable),
         unanswerable_query_count=len(dataset.examples) - len(answerable),
-        recall_at_k=recall_at_k(rankings, relevant, k=k),
-        mean_reciprocal_rank_at_k=mean_reciprocal_rank_at_k(
-            rankings,
-            relevant,
-            k=k,
-        ),
+        recall_at_k=recall,
+        mean_reciprocal_rank_at_k=mean_reciprocal_rank,
     )
 
 

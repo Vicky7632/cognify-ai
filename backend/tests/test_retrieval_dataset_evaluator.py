@@ -194,7 +194,7 @@ def test_rejects_invalid_ranked_records(
         )
 
 
-def test_rejects_dataset_without_answerable_queries() -> None:
+def test_all_unanswerable_dataset_has_undefined_retrieval_metrics() -> None:
     dataset = load_retrieval_evaluation_dataset()
     unanswerable_dataset = replace(
         dataset,
@@ -210,8 +210,16 @@ def test_rejects_dataset_without_answerable_queries() -> None:
         ),
     )
 
-    with pytest.raises(ValueError, match="At least one answerable query"):
-        evaluate_retrieval_dataset(unanswerable_dataset, {}, k=1)
+    result = evaluate_retrieval_dataset(unanswerable_dataset, {}, k=1)
+
+    assert result.total_query_count == 4
+    assert result.answerable_query_count == 0
+    assert result.unanswerable_query_count == 4
+    assert result.recall_at_k is None
+    assert result.mean_reciprocal_rank_at_k is None
+    assert json.loads(json.dumps(result.to_dict()))["recall_at_k"] is None
+    with pytest.raises(ValueError, match="k must be a positive integer"):
+        evaluate_retrieval_dataset(unanswerable_dataset, {}, k=0)
 
 
 def test_rejects_directly_constructed_answerable_example_without_relevant_chunks() -> None:

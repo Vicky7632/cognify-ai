@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -15,6 +16,7 @@ from app.services.offline_rag_evaluation import (
     QueryEvaluationInput,
     evaluate_offline_rag,
 )
+from app.services.retrieval_evaluation_dataset import DEFAULT_DATASET_PATH
 
 VALID_SEGMENT_ID = UUID("00000000-0000-0000-0000-000000000001")
 UNKNOWN_SEGMENT_ID = UUID("00000000-0000-0000-0000-000000000002")
@@ -212,6 +214,62 @@ def test_empty_input_is_explicit_across_all_evaluators() -> None:
         for query in result.abstention.query_results
     )
     assert result.abstention.abstention_precision is None
+
+
+def test_unified_evaluation_supports_all_unanswerable_dataset(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(DEFAULT_DATASET_PATH.read_text(encoding="utf-8"))
+    for example in payload["examples"]:
+        example["sufficient_evidence"] = False
+        example["relevant_chunk_ids"] = []
+        example.pop("reference_answer", None)
+        example.pop("key_facts", None)
+    dataset_path = tmp_path / "all-unanswerable.json"
+    dataset_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = evaluate_offline_rag(
+        OfflineRAGEvaluationInput(
+            queries=(
+                QueryEvaluationInput(
+                    query_id="study-break-duration",
+                    decision=AnswerDecision.ABSTAINED,
+                ),
+                QueryEvaluationInput(
+                    query_id="study-break-benefit",
+                    decision=AnswerDecision.ABSTAINED,
+                ),
+                QueryEvaluationInput(
+                    query_id="study-techniques-comparison",
+                    decision=AnswerDecision.ANSWERED,
+                ),
+                QueryEvaluationInput(
+                    query_id="unsupported-exam-date",
+                    decision=AnswerDecision.ABSTAINED,
+                ),
+            )
+        ),
+        dataset_path=dataset_path,
+    )
+
+    assert result.retrieval.total_query_count == 4
+    assert result.retrieval.answerable_query_count == 0
+    assert result.retrieval.unanswerable_query_count == 4
+    assert result.retrieval.recall_at_k is None
+    assert result.retrieval.mean_reciprocal_rank_at_k is None
+    assert result.abstention.abstention_precision == 1.0
+    assert result.abstention.abstention_precision_numerator == 3
+    assert result.abstention.abstention_precision_denominator == 3
+    assert result.abstention.abstention_recall == 0.75
+    assert result.abstention.abstention_recall_numerator == 3
+    assert result.abstention.abstention_recall_denominator == 4
+    assert result.abstention.incorrect_answer_rate == 0.25
+    assert result.abstention.incorrect_answer_rate_numerator == 1
+    assert result.abstention.incorrect_answer_rate_denominator == 4
+
+    serialized = result.to_dict()
+    assert json.loads(json.dumps(serialized))["retrieval"]["recall_at_k"] is None
+    assert serialized["abstention"]["abstention_precision"] == 1.0
 
 
 def test_rejects_duplicate_and_unknown_query_ids() -> None:
