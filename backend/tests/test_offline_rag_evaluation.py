@@ -196,6 +196,118 @@ def test_partial_inputs_are_reported_and_missing_decisions_stay_missing() -> Non
     assert result.claim_support.claim_support_rate is None
 
 
+@pytest.mark.parametrize(
+    ("decision", "insufficient_evidence"),
+    [
+        (AnswerDecision.ANSWERED, True),
+        (AnswerDecision.ABSTAINED, False),
+    ],
+)
+def test_rejects_decision_conflicting_with_answer_evidence(
+    decision: AnswerDecision,
+    insufficient_evidence: bool,
+) -> None:
+    with pytest.raises(ValueError, match="decision conflicts with answer"):
+        evaluate_offline_rag(
+            OfflineRAGEvaluationInput(
+                queries=(
+                    QueryEvaluationInput(
+                        query_id="study-break-duration",
+                        answer=GroundedAnswer(
+                            answer="A synthetic answer.",
+                            citations=(),
+                            insufficient_evidence=insufficient_evidence,
+                        ),
+                        decision=decision,
+                    ),
+                )
+            )
+        )
+
+
+@pytest.mark.parametrize("insufficient_evidence", [None, 1, "true"])
+def test_rejects_non_boolean_answer_insufficient_evidence(
+    insufficient_evidence: object,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="answer.insufficient_evidence must be a boolean",
+    ):
+        evaluate_offline_rag(
+        OfflineRAGEvaluationInput(
+            queries=(
+                QueryEvaluationInput(
+                    query_id="study-break-duration",
+                    answer=GroundedAnswer(
+                        answer="A synthetic answer.",
+                        citations=(),
+                        insufficient_evidence=insufficient_evidence,
+                    ),
+                ),
+            )
+        )
+        )
+
+
+@pytest.mark.parametrize(
+    ("decision", "insufficient_evidence", "expected_outcome"),
+    [
+        (AnswerDecision.ANSWERED, False, QueryOutcome.CORRECT_ANSWER),
+        (AnswerDecision.ABSTAINED, True, QueryOutcome.UNNECESSARY_ABSTENTION),
+    ],
+)
+def test_accepts_decision_consistent_with_answer_evidence(
+    decision: AnswerDecision,
+    insufficient_evidence: bool,
+    expected_outcome: QueryOutcome,
+) -> None:
+    result = evaluate_offline_rag(
+        OfflineRAGEvaluationInput(
+            queries=(
+                QueryEvaluationInput(
+                    query_id="study-break-duration",
+                    answer=GroundedAnswer(
+                        answer="A synthetic answer.",
+                        citations=(),
+                        insufficient_evidence=insufficient_evidence,
+                    ),
+                    decision=decision,
+                ),
+            )
+        )
+    )
+
+    assert result.abstention.query_results[0].outcome is expected_outcome
+
+
+def test_missing_decision_remains_missing_with_insufficient_evidence_answer() -> None:
+    result = evaluate_offline_rag(
+        OfflineRAGEvaluationInput(
+            queries=(
+                QueryEvaluationInput(
+                    query_id="study-break-duration",
+                    answer=GroundedAnswer(
+                        answer="Insufficient evidence.",
+                        citations=(),
+                        insufficient_evidence=True,
+                    ),
+                ),
+            )
+        )
+    )
+
+    assert (
+        result.abstention.query_results[0].outcome
+        is QueryOutcome.MISSING_PREDICTION
+    )
+    assert result.missing_inputs.decision_query_ids == (
+        "study-break-duration",
+        "study-break-benefit",
+        "study-techniques-comparison",
+        "unsupported-exam-date",
+    )
+
+
 def test_empty_input_is_explicit_across_all_evaluators() -> None:
     result = evaluate_offline_rag(OfflineRAGEvaluationInput(queries=()))
 
@@ -456,3 +568,70 @@ def test_source_consistency_deduplicates_duplicate_claim_source_ids() -> None:
     assert consistency.mismatched_query_count == 1
     assert query.annotated_segment_ids == (VALID_SEGMENT_ID,)
     assert query.missing_answer_segment_ids == (VALID_SEGMENT_ID,)
+
+
+def test_unified_report_includes_all_metrics_and_source_id_consistency() -> None:
+    result = evaluate_offline_rag(
+        OfflineRAGEvaluationInput(
+            queries=(
+                QueryEvaluationInput(
+                    query_id="study-break-duration",
+                    retrieved_chunk_ids=("chunk-break-timing",),
+                    available_chunk_ids=(VALID_SEGMENT_ID,),
+                    answer=GroundedAnswer(
+                        answer="A synthetic answer.",
+                        citations=(
+                            _citation(VALID_SEGMENT_ID),
+                            _citation(UNKNOWN_SEGMENT_ID),
+                        ),
+                        insufficient_evidence=False,
+                    ),
+                    claims=(_claim(),),
+                    decision=AnswerDecision.ANSWERED,
+                ),
+                QueryEvaluationInput(
+                    query_id="unsupported-exam-date",
+                    decision=AnswerDecision.ABSTAINED,
+                ),
+                QueryEvaluationInput(
+                    query_id="study-break-benefit",
+                    retrieved_chunk_ids=("chunk-study-breaks",),
+                    decision=AnswerDecision.ANSWERED,
+                ),
+                QueryEvaluationInput(
+                    query_id="study-techniques-comparison",
+                    retrieved_chunk_ids=(
+                        "chunk-active-recall",
+                        "chunk-spaced-review",
+                    ),
+                    decision=AnswerDecision.ANSWERED,
+                ),
+            ),
+            k=1,
+            chunk_id_to_segment_id={
+                "chunk-break-timing": VALID_SEGMENT_ID,
+            },
+        )
+    )
+
+    consistency = result.citation_source_consistency
+    assert consistency is not None
+    assert result.retrieval.recall_at_k == 1.0
+    assert result.retrieval.mean_reciprocal_rank_at_k == 1.0
+    assert result.citations.citation_validity == 0.5
+    assert result.citations.citation_coverage == pytest.approx(1 / 3)
+    assert result.claim_support.claim_support_rate == 1.0
+    assert result.abstention.abstention_precision == 1.0
+    assert result.abstention.abstention_recall == 1.0
+    assert consistency.checked_query_count == 1
+    assert consistency.mismatched_query_count == 1
+    assert consistency.unmapped_citation_count == 1
+    assert consistency.query_results[0].query_id == "study-break-duration"
+    assert consistency.query_results[0].annotated_segment_ids == (VALID_SEGMENT_ID,)
+    assert consistency.query_results[0].unannotated_answer_segment_ids == (
+        UNKNOWN_SEGMENT_ID,
+    )
+
+    serialized = result.to_dict()
+    assert json.loads(json.dumps(serialized)) == serialized
+    assert serialized["citation_source_consistency"]["checked_query_count"] == 1

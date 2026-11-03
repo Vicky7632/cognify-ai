@@ -45,7 +45,8 @@ The roadmap is ordered by dependency. Each phase has a small acceptance gate and
 - **Implemented (Day 28):** `POST /api/v1/retrieval/search` exposes the retrieval service with a validated query, `top_k` (1–100, default 10), and optional document UUID filter. Typed responses return result identifiers, ordinal, score, and available metadata. Configuration failures return safe `503` responses; provider failures return safe `502` responses; invalid requests return `422`. API tests override the service with fakes. No live Gemini or Pinecone calls were made.
 - **Implemented (Day 29):** `GroundedAnswerService` loads retrieved segment IDs from PostgreSQL, verifies document/ordinal consistency, uses only non-empty stored text as untrusted context, and asks an injectable LLM provider for an answer. Citations are built from verified database records, not model-generated claims. No search results or usable sources produce an explicit abstention without calling the LLM. `POST /api/v1/retrieval/answer` exposes the service. The official existing `google-genai` SDK is wrapped behind a grounded-answer provider, but no generation-model default is chosen: configure `LLM_PROVIDER=gemini`, an explicitly selected supported `LLM_MODEL`, and `GEMINI_API_KEY`. Offline tests use fakes; no live AI service calls were made.
 - **Implemented (Day 32):** the upload flow queues document processing without holding the HTTP request open for extraction or provider calls. A separate worker connects local PDF/TXT extraction and PostgreSQL segment persistence to Gemini embeddings and Pinecone upsert. Upload-to-index processing is now wired, subject to applying migrations, running the worker, and providing valid provider/index configuration.
-- **Next:** evaluate retrieval relevance, citation correctness, and abstention with a versioned dataset; select/validate an LLM model and verify provider account, privacy, and usage terms before a live smoke test.
+- **Implemented (Day 33):** versioned offline retrieval evaluation with Recall@k/MRR@k reporting; citation validity and coverage; annotated claim support; optional citation source-ID consistency; abstention evaluation; and unified deterministic offline reporting. These checks do not establish semantic entailment or answer correctness.
+- **Next:** select/validate an LLM model and verify provider account, privacy, and usage terms before a live smoke test.
 - Decide Pinecone index region/namespace, re-embedding, deletion, and reconciliation behavior for partial failures before production use.
 - **Acceptance:** tests cover provider contract/input-output validation and chunk/provenance mapping, embedding compatibility, upsert/query failures, and no-result behavior. No reranking in v1.
 
@@ -68,7 +69,7 @@ The roadmap is ordered by dependency. Each phase has a small acceptance gate and
 
 ## 10. Automated testing, evaluation, and deployment preparation
 
-- Complete automated tests and an offline evaluation set for retrieval, citations, answer support, abstention, latency, and failure cases.
+- **Implemented (Day 33):** offline evaluation components and unified reporting for retrieval, citation validity/coverage, claim support, citation source-ID consistency, and abstention. Continue expanding automated evaluation for latency, ingestion correctness, and failure cases as those capabilities mature.
 - Review privacy, security, operational limits, cost, and deployment requirements. Do not add Docker/Kubernetes until a separate decision is made.
 - **Acceptance:** repeatable evaluation with documented dataset/model/config versions; no invented performance claims; deployment readiness review identifies access controls.
 

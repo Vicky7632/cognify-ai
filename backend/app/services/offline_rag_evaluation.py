@@ -300,17 +300,38 @@ def _validate_query_inputs(
             )
         if query.answer is not None and not isinstance(query.answer, GroundedAnswer):
             raise ValueError(f"queries[{index}].answer must be a GroundedAnswer.")
+        if query.answer is not None and not isinstance(
+            query.answer.insufficient_evidence,
+            bool,
+        ):
+            raise ValueError(
+                f"queries[{index}].answer.insufficient_evidence must be a boolean."
+            )
         if query.claims is not None:
             if not isinstance(query.claims, tuple):
                 raise ValueError(f"queries[{index}].claims must be a tuple.")
             evaluate_claim_support(query.claims)
         if query.decision is not None:
             try:
-                AnswerDecision(query.decision)
+                decision = AnswerDecision(query.decision)
             except (TypeError, ValueError) as error:
                 raise ValueError(
                     f"queries[{index}].decision must be answered or abstained."
                 ) from error
+            if query.answer is not None and (
+                (
+                    decision is AnswerDecision.ANSWERED
+                    and query.answer.insufficient_evidence is True
+                )
+                or (
+                    decision is AnswerDecision.ABSTAINED
+                    and query.answer.insufficient_evidence is False
+                )
+            ):
+                raise ValueError(
+                    f"queries[{index}].decision conflicts with "
+                    "answer.insufficient_evidence."
+                )
         queries.append(query)
     return tuple(queries)
 
