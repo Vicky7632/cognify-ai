@@ -25,6 +25,11 @@ from app.services.document_processor import (
     DocumentProcessingInput,
 )
 from app.services.local_document_processor import LocalDocumentProcessor
+from app.transcription import (
+    TranscriptionRequest,
+    TranscriptionResult,
+    TranscriptionSegment,
+)
 
 
 @pytest.fixture
@@ -204,6 +209,61 @@ def test_unsupported_file_type_fails_safely(upload_root: Path) -> None:
     expect_safe_failure(
         LocalDocumentProcessor(upload_root),
         make_input(f"{uuid4().hex}.mp3", DocumentFileType.MP3),
+    )
+
+
+@pytest.mark.parametrize("file_type", [DocumentFileType.MP3, DocumentFileType.WAV])
+def test_audio_transcription_preserves_text_and_timestamps(
+    upload_root: Path,
+    file_type: DocumentFileType,
+) -> None:
+    storage_key = write_upload(upload_root, file_type.value, b"fake audio")
+    expected = TranscriptionResult(
+        (
+            TranscriptionSegment("First spoken segment.", 0.0, 1.25),
+            TranscriptionSegment("Second spoken segment.", 1.5, 2.75),
+        )
+    )
+
+    class FakeTranscriber:
+        def __init__(self) -> None:
+            self.request: TranscriptionRequest | None = None
+
+        def transcribe(
+            self,
+            request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            self.request = request
+            return expected
+
+    transcriber = FakeTranscriber()
+    result = LocalDocumentProcessor(upload_root, transcriber).process(
+        make_input(storage_key, file_type)
+    )
+
+    assert transcriber.request is not None
+    assert transcriber.request.audio_path == upload_root / storage_key
+    assert [
+        (segment.text, segment.start_seconds, segment.end_seconds)
+        for segment in result.segments
+    ] == [
+        ("First spoken segment.", 0.0, 1.25),
+        ("Second spoken segment.", 1.5, 2.75),
+    ]
+
+
+def test_mp4_remains_unsupported_even_with_transcriber(
+    upload_root: Path,
+) -> None:
+    storage_key = write_upload(upload_root, "mp4", b"\x00\x00\x00\x18ftypisom")
+
+    class UnexpectedTranscriber:
+        def transcribe(self, _request: TranscriptionRequest) -> TranscriptionResult:
+            pytest.fail("MP4 must not be sent to the audio transcriber.")
+
+    expect_safe_failure(
+        LocalDocumentProcessor(upload_root, UnexpectedTranscriber()),
+        make_input(storage_key, DocumentFileType.MP4),
     )
 
 

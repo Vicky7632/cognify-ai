@@ -13,6 +13,10 @@ def clear_application_environment(monkeypatch) -> None:
         "COGNIFY_API_V1_PREFIX",
         "COGNIFY_UPLOAD_ROOT",
         "COGNIFY_MAX_UPLOAD_SIZE_BYTES",
+        "TRANSCRIPTION_MODEL_PATH",
+        "TRANSCRIPTION_CPU_THREADS",
+        "TRANSCRIPTION_COMPUTE_TYPE",
+        "TRANSCRIPTION_MAX_AUDIO_SECONDS",
         "DATABASE_URL",
         "EMBEDDING_PROVIDER",
         "EMBEDDING_MODEL",
@@ -48,11 +52,34 @@ def test_defaults_without_environment_or_dotenv(monkeypatch) -> None:
     assert settings.pinecone_upsert_batch_size == 100
     assert settings.max_upload_size_bytes == 25 * 1024 * 1024
     assert settings.upload_root == PROJECT_ROOT / "storage" / "uploads"
+    assert settings.transcription_model_path == (
+        PROJECT_ROOT / "models" / "faster-whisper" / "base"
+    )
+    assert settings.transcription_cpu_threads == 2
+    assert settings.transcription_compute_type == "int8"
+    assert settings.transcription_max_audio_seconds == 300
 
 
 def test_rejects_nonpositive_maximum_upload_size() -> None:
     with pytest.raises(ValidationError, match="Maximum upload size"):
         Settings(max_upload_size_bytes=0, _env_file=None)
+
+
+def test_rejects_nonpositive_transcription_cpu_threads() -> None:
+    with pytest.raises(ValidationError, match="Transcription CPU threads"):
+        Settings(transcription_cpu_threads=0, _env_file=None)
+
+
+@pytest.mark.parametrize("value", ["", "cuda", "int7"])
+def test_rejects_unsupported_transcription_compute_type(value: str) -> None:
+    with pytest.raises(ValidationError, match="Transcription compute type"):
+        Settings(transcription_compute_type=value, _env_file=None)
+
+
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan")])
+def test_rejects_invalid_transcription_audio_duration(value: float) -> None:
+    with pytest.raises(ValidationError, match="Maximum transcription audio duration"):
+        Settings(transcription_max_audio_seconds=value, _env_file=None)
 
 
 def test_rejects_nonpositive_embedding_dimensions() -> None:
@@ -82,9 +109,27 @@ def test_resolves_relative_upload_root_from_repository_root() -> None:
     assert settings.upload_root == PROJECT_ROOT / "storage" / "uploads"
 
 
+def test_resolves_relative_transcription_model_path_from_repository_root() -> None:
+    settings = Settings(
+        transcription_model_path=Path("models/faster-whisper/base"),
+        _env_file=None,
+    )
+
+    assert settings.transcription_model_path == (
+        PROJECT_ROOT / "models" / "faster-whisper" / "base"
+    )
+
+
 def test_environment_variables_override_defaults(monkeypatch) -> None:
     monkeypatch.setenv("COGNIFY_APP_NAME", "Test Cognify")
     monkeypatch.setenv("COGNIFY_API_V1_PREFIX", "/test/v1")
+    monkeypatch.setenv(
+        "TRANSCRIPTION_MODEL_PATH",
+        str(PROJECT_ROOT / "models" / "custom"),
+    )
+    monkeypatch.setenv("TRANSCRIPTION_CPU_THREADS", "3")
+    monkeypatch.setenv("TRANSCRIPTION_COMPUTE_TYPE", "int8_float32")
+    monkeypatch.setenv("TRANSCRIPTION_MAX_AUDIO_SECONDS", "45")
     monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
     monkeypatch.setenv("EMBEDDING_MODEL", "test-model")
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "3")
@@ -107,6 +152,10 @@ def test_environment_variables_override_defaults(monkeypatch) -> None:
 
     assert settings.app_name == "Test Cognify"
     assert settings.api_v1_prefix == "/test/v1"
+    assert settings.transcription_model_path == PROJECT_ROOT / "models" / "custom"
+    assert settings.transcription_cpu_threads == 3
+    assert settings.transcription_compute_type == "int8_float32"
+    assert settings.transcription_max_audio_seconds == 45
     assert settings.embedding_provider == "fake"
     assert settings.embedding_model == "test-model"
     assert settings.embedding_dimensions == 3

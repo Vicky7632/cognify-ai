@@ -10,18 +10,32 @@ from app.services.document_processor import (
     ProcessedSegment,
 )
 from app.services.file_storage import storage_path_for_key
+from app.transcription import (
+    Transcriber,
+    TranscriptionRequest,
+)
 
 
 class LocalDocumentProcessor:
     """Extract PDF pages and strict UTF-8 text from files in the upload root."""
 
-    def __init__(self, upload_root: Path) -> None:
+    def __init__(
+        self,
+        upload_root: Path,
+        transcriber: Transcriber | None = None,
+    ) -> None:
         self._upload_root = upload_root
+        self._transcriber = transcriber
 
     def process(self, document: DocumentProcessingInput) -> ProcessingResult:
         try:
             file_type = DocumentFileType(document.file_type)
-            if file_type not in (DocumentFileType.PDF, DocumentFileType.TXT):
+            if file_type not in (
+                DocumentFileType.PDF,
+                DocumentFileType.TXT,
+                DocumentFileType.MP3,
+                DocumentFileType.WAV,
+            ):
                 raise DocumentProcessingError(
                     DocumentProcessingErrorCode.PROCESSING_FAILED
                 )
@@ -32,7 +46,25 @@ class LocalDocumentProcessor:
                 )
             if file_type is DocumentFileType.PDF:
                 return self._process_pdf(path)
-            return self._process_text(path)
+            if file_type is DocumentFileType.TXT:
+                return self._process_text(path)
+            if self._transcriber is None:
+                raise DocumentProcessingError(
+                    DocumentProcessingErrorCode.PROCESSING_FAILED
+                )
+            result = self._transcriber.transcribe(
+                TranscriptionRequest(audio_path=path, file_type=file_type)
+            )
+            return ProcessingResult(
+                segments=tuple(
+                    ProcessedSegment(
+                        text=segment.text,
+                        start_seconds=segment.start_seconds,
+                        end_seconds=segment.end_seconds,
+                    )
+                    for segment in result.segments
+                )
+            )
         except DocumentProcessingError:
             raise
         except Exception as error:

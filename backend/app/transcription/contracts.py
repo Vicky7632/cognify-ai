@@ -11,6 +11,8 @@ class TranscriptionErrorCode(StrEnum):
     UNSUPPORTED_MEDIA = "unsupported_media"
     INVALID_TRANSCRIPTION = "invalid_transcription"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"
+    MODEL_UNAVAILABLE = "model_unavailable"
+    AUDIO_TOO_LONG = "audio_too_long"
     TIMEOUT = "timeout"
     MALFORMED_OUTPUT = "malformed_output"
 

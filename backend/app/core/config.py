@@ -1,4 +1,5 @@
 from functools import lru_cache
+from math import isfinite
 from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator
@@ -6,6 +7,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENV_FILE = PROJECT_ROOT / ".env"
+SUPPORTED_TRANSCRIPTION_COMPUTE_TYPES = frozenset(
+    {
+        "auto",
+        "default",
+        "int8",
+        "int8_float32",
+        "int8_float16",
+        "int8_bfloat16",
+        "int16",
+        "float16",
+        "float32",
+        "bfloat16",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -14,6 +29,22 @@ class Settings(BaseSettings):
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
     upload_root: Path = PROJECT_ROOT / "storage" / "uploads"
     max_upload_size_bytes: int = 25 * 1024 * 1024
+    transcription_model_path: Path = Field(
+        default=PROJECT_ROOT / "models" / "faster-whisper" / "base",
+        validation_alias="TRANSCRIPTION_MODEL_PATH",
+    )
+    transcription_cpu_threads: int = Field(
+        default=2,
+        validation_alias="TRANSCRIPTION_CPU_THREADS",
+    )
+    transcription_compute_type: str = Field(
+        default="int8",
+        validation_alias="TRANSCRIPTION_COMPUTE_TYPE",
+    )
+    transcription_max_audio_seconds: float = Field(
+        default=300,
+        validation_alias="TRANSCRIPTION_MAX_AUDIO_SECONDS",
+    )
     embedding_provider: str = Field(
         default="gemini",
         validation_alias="EMBEDDING_PROVIDER",
@@ -82,6 +113,39 @@ class Settings(BaseSettings):
     def validate_max_upload_size_bytes(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Maximum upload size must be greater than zero.")
+        return value
+
+    @field_validator("transcription_model_path")
+    @classmethod
+    def resolve_transcription_model_path(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            return PROJECT_ROOT / value
+        return value
+
+    @field_validator("transcription_cpu_threads")
+    @classmethod
+    def validate_transcription_cpu_threads(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Transcription CPU threads must be greater than zero.")
+        return value
+
+    @field_validator("transcription_compute_type", mode="before")
+    @classmethod
+    def validate_transcription_compute_type(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Transcription compute type is not supported.")
+        compute_type = value.strip().lower()
+        if compute_type not in SUPPORTED_TRANSCRIPTION_COMPUTE_TYPES:
+            raise ValueError("Transcription compute type is not supported.")
+        return compute_type
+
+    @field_validator("transcription_max_audio_seconds")
+    @classmethod
+    def validate_transcription_max_audio_seconds(cls, value: float) -> float:
+        if not isfinite(value) or value <= 0:
+            raise ValueError(
+                "Maximum transcription audio duration must be greater than zero."
+            )
         return value
 
     @field_validator("embedding_dimensions")
