@@ -1,6 +1,6 @@
 # Architecture
 
-> **Status:** Target architecture with implemented backend components. The service includes PDF/TXT ingestion, durable document processing, Gemini embedding integration, a Pinecone vector-store adapter, retrieval, grounded answers, and offline evaluation. Media transcription, frontend features, and live Pinecone/Gemini provider verification remain incomplete.
+> **Status:** Target architecture with implemented backend components. The service includes PDF/TXT ingestion, MP3/WAV transcription through durable document processing, Gemini embedding integration, a Pinecone vector-store adapter, retrieval, grounded answers, and offline evaluation. MP4/video extraction, frontend features, and live Pinecone/Gemini provider verification remain incomplete.
 
 ## Goals and boundaries
 
@@ -43,7 +43,7 @@ The diagram expresses intended boundaries; implemented paths are described in [t
 - **Frontend:** upload/document management, chat, and summaries/notes/transcript views. Keep all provider/database credentials on the backend.
 - **Relational persistence:** SQLAlchemy/PostgreSQL for document records, processing status/errors, optional ownership/course associations, chat sessions/messages, and source/processing metadata. The initial `Document` table has been created through Alembic; future schema changes must also use reviewed migrations.
 - **File storage:** independent abstraction for original files; local filesystem is acceptable initially. Define safe paths, lifecycle, and retention before implementation.
-- **Extraction:** direct PDF/TXT text extraction; MP3/WAV transcription; MP4 audio extraction with FFmpeg followed by transcription. Preserve page and timestamp provenance when available. OCR and video-frame analysis are deferred.
+- **Extraction:** direct PDF/TXT text extraction and MP3/WAV transcription are implemented in the worker pipeline; MP4 audio extraction with FFmpeg remains future work. Preserve page and timestamp provenance when available. OCR and video-frame analysis are deferred.
 - **Shared ingestion:** normalize extractor output, chunk content as appropriate, attach source metadata, generate embeddings, and persist vectors and retrievable text.
 - **Retrieval:** apply configurable top-k, similarity threshold, and metadata filters; do not rerank in v1.
 - **Generation:** pass retrieved evidence to a provider-neutral LLM interface; return evidence-linked citations and abstain when evidence does not support an answer.
