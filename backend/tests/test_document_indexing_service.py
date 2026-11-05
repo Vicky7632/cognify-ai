@@ -1,14 +1,19 @@
+from __future__ import annotations
+
+from contextlib import nullcontext
 from collections.abc import Callable, Generator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from numbers import Real
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app import document_worker
+from app.core.config import Settings
 from app.db.base import Base
 from app.models.document import (
     Document,
@@ -30,6 +35,7 @@ from app.services.document_indexing_service import (
     DocumentWorkerLockLostError,
 )
 from app.services.document_processing_worker import process_next_document_job
+from app.services.local_document_processor import LocalDocumentProcessor
 from app.services.document_processor import (
     DocumentProcessingError,
     DocumentProcessingInput,
@@ -44,6 +50,11 @@ from app.vector_store.protocol import (
     VectorRecord,
     VectorSearchResult,
     VectorStoreError,
+)
+from app.transcription import (
+    TranscriptionRequest,
+    TranscriptionResult,
+    TranscriptionSegment,
 )
 
 
@@ -73,6 +84,83 @@ def create_uploaded_document(session_factory: sessionmaker[Session]) -> UUID:
                 processing_status=DocumentStatus.UPLOADED,
             )
             return document.id
+
+
+def create_uploaded_audio_document(
+    session_factory: sessionmaker[Session],
+    upload_root: Path,
+    file_type: DocumentFileType,
+    filename: str,
+) -> tuple[UUID, UUID, str]:
+    storage_key = f"{uuid4().hex}.{file_type.value}"
+    (upload_root / storage_key).write_bytes(b"fake audio bytes")
+    with session_factory() as session:
+        with session.begin():
+            document = create_document(
+                session,
+                original_filename=f"{filename}.{file_type.value}",
+                file_type=file_type.value,
+                storage_path=storage_key,
+                processing_status=DocumentStatus.UPLOADED,
+            )
+            job = document_processing_job_repository.enqueue_document_processing(
+                session,
+                document.id,
+            )
+            return document.id, job.id, storage_key
+
+
+def make_audio_indexing_service(
+    session_factory: sessionmaker[Session],
+    upload_root: Path,
+    transcriber,
+) -> tuple[DocumentIndexingService, FakeEmbeddingService, FakeVectorStore]:
+    embedding = FakeEmbeddingService()
+    vector_store = FakeVectorStore()
+    service = DocumentIndexingService(
+        session_factory,
+        LocalDocumentProcessor(upload_root, transcriber),
+        lambda: DocumentVectorStorageService(
+            DocumentEmbeddingService(embedding),
+            vector_store,
+        ),
+    )
+    return service, embedding, vector_store
+
+
+class FakeWorkerLockConnection:
+    invalidated = False
+
+    def __init__(self) -> None:
+        self.unlock_attempts = 0
+
+    def __enter__(self) -> FakeWorkerLockConnection:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def begin(self):
+        return nullcontext()
+
+    def scalar(self, statement: object, _parameters=None) -> bool | int:
+        sql = str(statement)
+        if "pg_try_advisory_lock" in sql:
+            return True
+        if "pg_backend_pid" in sql:
+            return 42
+        if "pg_advisory_unlock" in sql:
+            self.unlock_attempts += 1
+            return True
+        raise AssertionError(f"Unexpected SQL statement: {sql}")
+
+
+class FakeWorkerEngine:
+    def __init__(self, connection: FakeWorkerLockConnection) -> None:
+        self.connection = connection
+
+    def connect(self) -> FakeWorkerLockConnection:
+        return self.connection
 
 
 class FakeProcessor:
@@ -392,6 +480,242 @@ def test_durable_job_worker_marks_job_complete_after_indexing(
     assert get_document(session_factory, document_id).processing_status == (
         DocumentStatus.COMPLETED.value
     )
+
+
+def test_background_worker_transcribes_mp3_and_wav_and_persists_segments(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
+    mp3_document_id, mp3_job_id, _mp3_storage_key = create_uploaded_audio_document(
+        session_factory,
+        upload_root,
+        DocumentFileType.MP3,
+        "audio-mp3",
+    )
+    wav_document_id, wav_job_id, _wav_storage_key = create_uploaded_audio_document(
+        session_factory,
+        upload_root,
+        DocumentFileType.WAV,
+        "audio-wav",
+    )
+    settings = Settings(
+        upload_root=upload_root,
+        transcription_model_path=tmp_path / "model",
+        _env_file=None,
+    )
+    monkeypatch.setattr(document_worker, "get_settings", lambda: settings)
+    monkeypatch.setattr(document_worker, "_advisory_lock_is_held", lambda *_args: True)
+    monkeypatch.setattr(document_worker, "POLL_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(
+        document_worker,
+        "create_embedding_service",
+        lambda _settings: FakeEmbeddingService(),
+    )
+    monkeypatch.setattr(
+        document_worker,
+        "create_pinecone_vector_store",
+        lambda _settings: FakeVectorStore(),
+    )
+
+    expected_by_type = {
+        DocumentFileType.MP3: ("MP3 transcript.", 0.25, 1.75),
+        DocumentFileType.WAV: ("WAV transcript.", 2.0, 3.5),
+    }
+    created_transcribers = []
+
+    class FakeTranscriber:
+        def __init__(
+            self,
+            _model_path,
+            *,
+            compute_type: str,
+            cpu_threads: int,
+            max_audio_seconds: float,
+        ) -> None:
+            assert compute_type == settings.transcription_compute_type
+            assert cpu_threads == settings.transcription_cpu_threads
+            assert max_audio_seconds == settings.transcription_max_audio_seconds
+            self.requests: list[TranscriptionRequest] = []
+            created_transcribers.append(self)
+
+        def transcribe(
+            self,
+            request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            self.requests.append(request)
+            text, start_seconds, end_seconds = expected_by_type[request.file_type]
+            return TranscriptionResult(
+                (
+                    TranscriptionSegment(
+                        text,
+                        start_seconds,
+                        end_seconds,
+                    ),
+                )
+            )
+
+    monkeypatch.setattr(
+        document_worker,
+        "FasterWhisperTranscriber",
+        FakeTranscriber,
+    )
+    lock_connection = FakeWorkerLockConnection()
+
+    worker_checks = 0
+
+    def stop_after_audio_jobs() -> bool:
+        nonlocal worker_checks
+        worker_checks += 1
+        return worker_checks > 5 or bool(
+            created_transcribers
+            and len(created_transcribers[0].requests) >= 2
+        )
+
+    document_worker.run_worker(
+        FakeWorkerEngine(lock_connection),
+        session_factory,
+        stop_requested=stop_after_audio_jobs,
+    )
+
+    assert len(created_transcribers) == 1
+    assert {request.file_type for request in created_transcribers[0].requests} == {
+        DocumentFileType.MP3,
+        DocumentFileType.WAV,
+    }
+    for document_id, job_id, file_type in (
+        (mp3_document_id, mp3_job_id, DocumentFileType.MP3),
+        (wav_document_id, wav_job_id, DocumentFileType.WAV),
+    ):
+        expected_text, start_seconds, end_seconds = expected_by_type[file_type]
+        persisted_segments = get_segments(session_factory, document_id)
+        assert [segment.text_content for segment in persisted_segments] == [
+            expected_text
+        ]
+        assert [
+            (segment.start_seconds, segment.end_seconds)
+            for segment in persisted_segments
+        ] == [(start_seconds, end_seconds)]
+        assert get_document(session_factory, document_id).processing_status == (
+            DocumentStatus.COMPLETED.value
+        )
+        with session_factory() as session:
+            job = session.get(DocumentProcessingJob, job_id)
+            assert job is not None
+            assert job.status == DocumentProcessingJobStatus.COMPLETED.value
+            assert job.attempts == 1
+    assert lock_connection.unlock_attempts == 1
+
+
+def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
+    (
+        failed_document_id,
+        failed_job_id,
+        failed_storage_key,
+    ) = create_uploaded_audio_document(
+        session_factory,
+        upload_root,
+        DocumentFileType.MP3,
+        "fails",
+    )
+    (
+        successful_document_id,
+        successful_job_id,
+        successful_storage_key,
+    ) = create_uploaded_audio_document(
+        session_factory,
+        upload_root,
+        DocumentFileType.WAV,
+        "succeeds",
+    )
+    with session_factory() as session:
+        with session.begin():
+            failed_job = session.get(DocumentProcessingJob, failed_job_id)
+            successful_job = session.get(DocumentProcessingJob, successful_job_id)
+            assert failed_job is not None
+            assert successful_job is not None
+            successful_job.created_at = datetime.now(UTC)
+            failed_job.created_at = successful_job.created_at - timedelta(seconds=2)
+
+    class FakeTranscriber:
+        def __init__(self) -> None:
+            self.requests: list[TranscriptionRequest] = []
+
+        def transcribe(
+            self,
+            request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            self.requests.append(request)
+            if request.audio_path.name == failed_storage_key:
+                raise RuntimeError("controlled transcription failure")
+            return TranscriptionResult(
+                (TranscriptionSegment("Recovered transcript.", 0.0, 1.0),)
+            )
+
+    transcriber = FakeTranscriber()
+
+    def create_service(_document_id: UUID) -> DocumentIndexingService:
+        return make_audio_indexing_service(
+            session_factory,
+            upload_root,
+            transcriber,
+        )[0]
+
+    assert process_next_document_job(session_factory, create_service)
+    with session_factory() as session:
+        failed_job = session.get(DocumentProcessingJob, failed_job_id)
+        assert failed_job is not None
+        assert failed_job.status == DocumentProcessingJobStatus.QUEUED.value
+        assert failed_job.attempts == 1
+    assert get_document(session_factory, failed_document_id).processing_status == (
+        DocumentStatus.FAILED.value
+    )
+
+    assert process_next_document_job(session_factory, create_service)
+    with session_factory() as session:
+        successful_job = session.get(DocumentProcessingJob, successful_job_id)
+        assert successful_job is not None
+        assert successful_job.status == DocumentProcessingJobStatus.COMPLETED.value
+        assert successful_job.attempts == 1
+    assert [
+        segment.text_content
+        for segment in get_segments(session_factory, successful_document_id)
+    ] == ["Recovered transcript."]
+
+    for _ in range(
+        document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS - 1
+    ):
+        with session_factory() as session:
+            with session.begin():
+                failed_job = session.get(DocumentProcessingJob, failed_job_id)
+                assert failed_job is not None
+                failed_job.available_at = datetime.now(UTC)
+        assert process_next_document_job(session_factory, create_service)
+
+    with session_factory() as session:
+        failed_job = session.get(DocumentProcessingJob, failed_job_id)
+        assert failed_job is not None
+        assert failed_job.status == DocumentProcessingJobStatus.FAILED.value
+        assert failed_job.attempts == (
+            document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS
+        )
+    failed_document = get_document(session_factory, failed_document_id)
+    assert failed_document.processing_status == DocumentStatus.FAILED.value
+    assert failed_document.processing_error_code == "processing_failed"
+    assert get_segments(session_factory, failed_document_id) == []
+    assert [request.audio_path.name for request in transcriber.requests] == [
+        failed_storage_key,
+        successful_storage_key,
+        failed_storage_key,
+        failed_storage_key,
+    ]
 
 
 def test_lock_loss_during_failed_embedding_skips_failure_and_retry_writes(
