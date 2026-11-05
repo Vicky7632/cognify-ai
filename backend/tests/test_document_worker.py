@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from threading import enumerate as enumerate_threads
+from uuid import UUID, uuid4
 
 import pytest
 
 from app import document_worker
 from app.core.config import Settings
 from app.services.document_indexing_service import DocumentWorkerLockLostError
+from app.services.local_document_processor import LocalDocumentProcessor
+from app.transcription import Transcriber
 
 
 class FakeTransaction:
@@ -270,6 +273,110 @@ def test_worker_releases_lock_connection_on_graceful_shutdown(
         thread.name == "document-worker-lock-monitor"
         for thread in enumerate_threads()
     )
+
+
+def test_worker_reuses_one_configured_transcriber_across_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    settings = Settings(
+        upload_root=tmp_path / "uploads",
+        transcription_model_path=tmp_path / "model",
+        transcription_compute_type="int8_float32",
+        transcription_cpu_threads=3,
+        transcription_max_audio_seconds=90,
+        _env_file=None,
+    )
+    monkeypatch.setattr(document_worker, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        document_worker.document_processing_job_repository,
+        "recover_interrupted_document_processing_jobs",
+        lambda _session: 0,
+    )
+    monkeypatch.setattr(
+        document_worker.document_processing_job_repository,
+        "enqueue_unqueued_uploaded_documents",
+        lambda _session: 0,
+    )
+
+    constructed_transcribers: list[Transcriber] = []
+    received_transcribers: list[Transcriber | None] = []
+
+    class FakeTranscriber:
+        def __init__(
+            self,
+            model_path,
+            *,
+            compute_type: str,
+            cpu_threads: int,
+            max_audio_seconds: float,
+        ) -> None:
+            assert model_path == settings.transcription_model_path
+            assert compute_type == "int8_float32"
+            assert cpu_threads == 3
+            assert max_audio_seconds == 90
+            constructed_transcribers.append(self)
+
+        def transcribe(self, _request: object) -> object:
+            raise AssertionError("This worker-factory test does not transcribe.")
+
+    class CapturedIndexingService:
+        def __init__(
+            self,
+            _session_factory,
+            processor: LocalDocumentProcessor,
+            _storage_factory,
+            *,
+            ensure_worker_lock,
+        ) -> None:
+            assert ensure_worker_lock is not None
+            received_transcribers.append(processor._transcriber)
+
+    monkeypatch.setattr(
+        document_worker,
+        "FasterWhisperTranscriber",
+        FakeTranscriber,
+    )
+    monkeypatch.setattr(
+        document_worker,
+        "DocumentIndexingService",
+        CapturedIndexingService,
+    )
+    monkeypatch.setattr(
+        document_worker,
+        "_advisory_lock_is_held",
+        lambda _engine, _pid: True,
+    )
+
+    factory_calls = 0
+
+    def process_next(
+        _session_factory: Callable[[], FakeSession],
+        indexing_service_factory: Callable[[UUID], object],
+        *,
+        ensure_worker_lock: Callable[[], None],
+    ) -> bool:
+        nonlocal factory_calls
+        ensure_worker_lock()
+        indexing_service_factory(uuid4())
+        factory_calls += 1
+        return True
+
+    monkeypatch.setattr(document_worker, "process_next_document_job", process_next)
+    connection = FakeLockConnection()
+    document_worker.run_worker(
+        FakeEngine(connection),
+        lambda: FakeSession(),
+        stop_requested=lambda: factory_calls >= 2,
+    )
+
+    assert len(constructed_transcribers) == 1
+    assert len(received_transcribers) == 2
+    assert all(
+        transcriber is constructed_transcribers[0]
+        for transcriber in received_transcribers
+    )
+    assert connection.unlock_attempts == 1
 
 
 def test_worker_invalidates_connection_when_advisory_unlock_fails(

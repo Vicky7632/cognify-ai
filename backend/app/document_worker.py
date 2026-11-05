@@ -21,6 +21,7 @@ from app.services.document_vector_storage_service import (
 )
 from app.services.embedding_service import create_embedding_service
 from app.services.local_document_processor import LocalDocumentProcessor
+from app.transcription import FasterWhisperTranscriber, Transcriber
 from app.vector_store.pinecone_adapter import create_pinecone_vector_store
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,12 @@ def run_worker(
                 )
 
             settings = get_settings()
+            transcriber = FasterWhisperTranscriber(
+                settings.transcription_model_path,
+                compute_type=settings.transcription_compute_type,
+                cpu_threads=settings.transcription_cpu_threads,
+                max_audio_seconds=settings.transcription_max_audio_seconds,
+            )
             while not stop_requested():
                 ensure_lock_owned()
                 processed = process_next_document_job(
@@ -138,6 +145,7 @@ def run_worker(
                         session_factory,
                         document_id,
                         settings,
+                        transcriber=transcriber,
                         ensure_worker_lock=ensure_lock_owned,
                     ),
                     ensure_worker_lock=ensure_lock_owned,
@@ -236,6 +244,7 @@ def _create_indexing_service(
     document_id: UUID,
     settings: Settings,
     *,
+    transcriber: Transcriber,
     ensure_worker_lock: Callable[[], None] = lambda: None,
 ) -> DocumentIndexingService:
     def create_storage() -> DocumentVectorStorageService:
@@ -252,7 +261,7 @@ def _create_indexing_service(
 
     return DocumentIndexingService(
         session_factory,
-        LocalDocumentProcessor(settings.upload_root),
+        LocalDocumentProcessor(settings.upload_root, transcriber),
         create_storage,
         ensure_worker_lock=ensure_worker_lock,
     )

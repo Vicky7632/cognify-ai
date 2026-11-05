@@ -132,6 +132,21 @@ def test_missing_runtime_dependency_returns_safe_error(
     assert str(raised.value) == "Transcription failed: runtime_unavailable."
 
 
+def test_transcriber_construction_keeps_runtime_loading_lazy(
+    model_path: Path,
+    monkeypatch,
+) -> None:
+    imports: list[str] = []
+    monkeypatch.setattr(
+        "app.transcription.faster_whisper_transcriber.importlib.import_module",
+        lambda name: imports.append(name),
+    )
+
+    FasterWhisperTranscriber(model_path)
+
+    assert imports == []
+
+
 def test_missing_model_directory_returns_model_unavailable(
     tmp_path: Path,
 ) -> None:
