@@ -2,6 +2,7 @@ import logging
 import math
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 import wave
@@ -57,6 +58,7 @@ class FFmpegAudioExtractor:
     def extract(self, input_video: Path, output_audio: Path) -> Path:
         self._validate_input(input_video)
         self._validate_output(output_audio)
+        executable = self._find_executable()
 
         try:
             temporary_directory = Path(
@@ -72,7 +74,7 @@ class FFmpegAudioExtractor:
 
         temporary_audio = temporary_directory / "extracted.wav"
         command = [
-            self._executable,
+            executable,
             "-nostdin",
             "-hide_banner",
             "-loglevel",
@@ -142,12 +144,68 @@ class FFmpegAudioExtractor:
                 and input_video.is_file()
                 and input_video.suffix.lower() == ".mp4"
             )
+            if is_valid:
+                is_valid = FFmpegAudioExtractor._has_valid_mp4_container(
+                    input_video
+                )
         except OSError:
             is_valid = False
         if not is_valid:
             raise FFmpegAudioExtractionError(
                 FFmpegAudioExtractionErrorCode.INVALID_INPUT
             )
+
+    @staticmethod
+    def _has_valid_mp4_container(input_video: Path) -> bool:
+        with input_video.open("rb") as media:
+            media.seek(0, os.SEEK_END)
+            file_size = media.tell()
+            offset = 0
+            found_file_type = False
+
+            while offset < file_size:
+                if file_size - offset < 8:
+                    return False
+                media.seek(offset)
+                header = media.read(8)
+                if len(header) != 8:
+                    return False
+                box_size, box_type = struct.unpack(">I4s", header)
+                header_size = 8
+                if box_size == 1:
+                    extended_size = media.read(8)
+                    if len(extended_size) != 8:
+                        return False
+                    box_size = struct.unpack(">Q", extended_size)[0]
+                    header_size = 16
+                elif box_size == 0:
+                    box_size = file_size - offset
+
+                if (
+                    box_size < header_size
+                    or box_size > file_size - offset
+                ):
+                    return False
+
+                if box_type == b"ftyp":
+                    if box_size < 16 or (box_size - 16) % 4:
+                        return False
+                    found_file_type = True
+
+                offset += box_size
+
+            return found_file_type
+
+    def _find_executable(self) -> str:
+        try:
+            executable = shutil.which(self._executable)
+        except OSError:
+            executable = None
+        if executable is None:
+            raise FFmpegAudioExtractionError(
+                FFmpegAudioExtractionErrorCode.FFMPEG_UNAVAILABLE
+            )
+        return executable
 
     @staticmethod
     def _validate_output(output_audio: Path) -> None:

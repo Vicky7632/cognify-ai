@@ -18,8 +18,22 @@ from app.transcription.ffmpeg_audio_extractor import (
 
 
 def make_mp4(path: Path) -> Path:
-    path.write_bytes(b"synthetic MP4 fixture")
+    file_type_payload = b"isom" + b"\x00\x00\x02\x00" + b"isom"
+    file_type_box = struct.pack(
+        ">I4s",
+        8 + len(file_type_payload),
+        b"ftyp",
+    ) + file_type_payload
+    path.write_bytes(file_type_box)
     return path
+
+
+@pytest.fixture(autouse=True)
+def ffmpeg_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.shutil.which",
+        lambda executable: executable,
+    )
 
 
 def make_wav_bytes() -> bytes:
@@ -53,7 +67,13 @@ def test_extracts_first_audio_stream_to_wav_with_paths_containing_spaces(
 ) -> None:
     input_video = make_mp4(tmp_path / "lesson video.mp4")
     output_audio = tmp_path / "extracted audio.wav"
+    resolved_executable = str(tmp_path / "FFmpeg Build" / "ffmpeg.exe")
     calls: list[tuple[list[str], dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.shutil.which",
+        lambda _executable: resolved_executable,
+    )
 
     def run(command: list[str], **kwargs: object) -> CompletedProcess[str]:
         calls.append((command, kwargs))
@@ -72,7 +92,7 @@ def test_extracts_first_audio_stream_to_wav_with_paths_containing_spaces(
     assert output_audio.is_file()
     assert len(calls) == 1
     command, kwargs = calls[0]
-    assert command[0] == "ffmpeg"
+    assert command[0] == resolved_executable
     assert command[command.index("-i") + 1] == str(input_video)
     temporary_output = Path(command[-1])
     assert temporary_output.parent.parent == tmp_path
@@ -111,6 +131,32 @@ def test_missing_ffmpeg_is_reported_without_exposing_paths(
         lambda: FFmpegAudioExtractor().extract(input_video, output_audio),
     )
     assert not output_audio.exists()
+    assert not temporary_outputs(tmp_path)
+
+
+def test_missing_ffmpeg_is_detected_before_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_video = make_mp4(tmp_path / "video.mp4")
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.shutil.which",
+        lambda _executable: None,
+    )
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail(
+            "FFmpeg must not run when executable lookup fails."
+        ),
+    )
+
+    assert_extraction_error(
+        FFmpegAudioExtractionErrorCode.FFMPEG_UNAVAILABLE,
+        lambda: FFmpegAudioExtractor().extract(
+            input_video,
+            tmp_path / "output.wav",
+        ),
+    )
     assert not temporary_outputs(tmp_path)
 
 
@@ -176,6 +222,98 @@ def test_invalid_input_is_rejected_without_invoking_ffmpeg(
             tmp_path / "output.wav",
         ),
     )
+
+
+@pytest.mark.parametrize(
+    "container_data",
+    [
+        b"not an MP4 container",
+        struct.pack(">I4s", 4, b"ftyp"),
+        struct.pack(">I4s", 100, b"ftyp") + b"isom",
+        struct.pack(">I4s", 8, b"ftyp"),
+        struct.pack(">I4s", 1, b"ftyp") + b"\x00\x00",
+    ],
+)
+def test_invalid_mp4_container_is_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    container_data: bytes,
+) -> None:
+    input_video = tmp_path / "invalid.mp4"
+    input_video.write_bytes(container_data)
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail(
+            "FFmpeg must not run for a malformed MP4 container."
+        ),
+    )
+
+    assert_extraction_error(
+        FFmpegAudioExtractionErrorCode.INVALID_INPUT,
+        lambda: FFmpegAudioExtractor().extract(
+            input_video,
+            tmp_path / "output.wav",
+        ),
+    )
+
+
+def test_mp4_with_leading_box_and_extended_ftyp_size_is_accepted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_type_payload = b"isom" + b"\x00\x00\x02\x00" + b"isom"
+    file_type_size = 16 + len(file_type_payload)
+    input_video = tmp_path / "extended.mp4"
+    input_video.write_bytes(
+        struct.pack(">I4s", 8, b"free")
+        + struct.pack(">I4sQ", 1, b"ftyp", file_type_size)
+        + file_type_payload
+    )
+    output_audio = tmp_path / "extended.wav"
+
+    def run(command: list[str], **_kwargs: object) -> CompletedProcess[str]:
+        Path(command[-1]).write_bytes(make_wav_bytes())
+        return CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.subprocess.run",
+        run,
+    )
+
+    assert FFmpegAudioExtractor().extract(input_video, output_audio) == output_audio
+    assert output_audio.is_file()
+
+
+def test_unreadable_input_is_rejected_without_exposing_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_video = make_mp4(tmp_path / "private video.mp4")
+    original_open = Path.open
+
+    def deny_input_read(
+        path: Path,
+        *args: object,
+        **kwargs: object,
+    ):
+        if path == input_video:
+            raise PermissionError("private path and access details")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", deny_input_read)
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail(
+            "FFmpeg must not run for unreadable input."
+        ),
+    )
+
+    with pytest.raises(FFmpegAudioExtractionError) as raised:
+        FFmpegAudioExtractor().extract(input_video, tmp_path / "output.wav")
+
+    assert raised.value.code is FFmpegAudioExtractionErrorCode.INVALID_INPUT
+    assert str(tmp_path) not in str(raised.value)
+    assert "private path" not in str(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -478,11 +616,22 @@ def test_cleanup_failure_after_publication_keeps_success_and_logs_warning(
         original_rmtree(temporary_directory)
 
 
-@pytest.mark.parametrize("output_kind", ["missing", "empty"])
+@pytest.mark.parametrize(
+    ("output_kind", "expected_code"),
+    [
+        ("missing", FFmpegAudioExtractionErrorCode.OUTPUT_MISSING),
+        ("empty", FFmpegAudioExtractionErrorCode.OUTPUT_MISSING),
+        (
+            "corrupt",
+            FFmpegAudioExtractionErrorCode.OUTPUT_VERIFICATION_FAILED,
+        ),
+    ],
+)
 def test_success_without_valid_output_is_reported(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     output_kind: str,
+    expected_code: FFmpegAudioExtractionErrorCode,
 ) -> None:
     input_video = make_mp4(tmp_path / "video.mp4")
     output_audio = tmp_path / "missing output.wav"
@@ -490,6 +639,8 @@ def test_success_without_valid_output_is_reported(
     def run(command: list[str], **_kwargs: object) -> CompletedProcess[str]:
         if output_kind == "empty":
             Path(command[-1]).touch()
+        elif output_kind == "corrupt":
+            Path(command[-1]).write_bytes(b"not a WAV file")
         return CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(
@@ -498,7 +649,7 @@ def test_success_without_valid_output_is_reported(
     )
 
     assert_extraction_error(
-        FFmpegAudioExtractionErrorCode.OUTPUT_MISSING,
+        expected_code,
         lambda: FFmpegAudioExtractor().extract(input_video, output_audio),
     )
     assert not output_audio.exists()
