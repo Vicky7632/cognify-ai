@@ -160,6 +160,31 @@ def test_missing_ffmpeg_is_detected_before_subprocess(
     assert not temporary_outputs(tmp_path)
 
 
+def test_process_launch_failure_is_sanitized_and_cleans_temporary_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_video = make_mp4(tmp_path / "launch.mp4")
+    output_audio = tmp_path / "launch.wav"
+
+    def fail_launch(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("private executable path and permission details")
+
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.subprocess.run",
+        fail_launch,
+    )
+
+    with pytest.raises(FFmpegAudioExtractionError) as raised:
+        FFmpegAudioExtractor().extract(input_video, output_audio)
+
+    assert raised.value.code is FFmpegAudioExtractionErrorCode.EXTRACTION_FAILED
+    assert str(tmp_path) not in str(raised.value)
+    assert "private executable path" not in str(raised.value)
+    assert not output_audio.exists()
+    assert not temporary_outputs(tmp_path)
+
+
 def test_nonzero_exit_cleans_partial_output_and_hides_stderr(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -397,6 +422,77 @@ def test_timeout_is_sanitized_and_cleans_temporary_output(
             tmp_path / "timeout.wav",
         ),
     )
+    assert not (tmp_path / "timeout.wav").exists()
+    assert not temporary_outputs(tmp_path)
+
+
+def test_subprocess_run_kills_and_reaps_process_after_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_video = make_mp4(tmp_path / "timed process.mp4")
+    output_audio = tmp_path / "timed process.wav"
+
+    class TimedOutProcess:
+        def __init__(
+            self,
+            command: list[str],
+            **_kwargs: object,
+        ) -> None:
+            self.args = command
+            self.returncode: int | None = None
+            self.kill_called = False
+            self.wait_called = False
+            self.communicate_calls = 0
+            process_instances.append(self)
+
+        def __enter__(self) -> "TimedOutProcess":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.wait()
+
+        def communicate(
+            self,
+            _input: object = None,
+            timeout: float | None = None,
+        ) -> tuple[str, str]:
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                Path(self.args[-1]).write_bytes(b"partial output")
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            return "", ""
+
+        def kill(self) -> None:
+            self.kill_called = True
+            self.returncode = -9
+
+        def wait(self) -> int:
+            self.wait_called = True
+            if self.returncode is None:
+                self.returncode = -9
+            return self.returncode
+
+    process_instances: list["TimedOutProcess"] = []
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.subprocess.Popen",
+        TimedOutProcess,
+    )
+
+    assert_extraction_error(
+        FFmpegAudioExtractionErrorCode.TIMEOUT,
+        lambda: FFmpegAudioExtractor(timeout_seconds=1.25).extract(
+            input_video,
+            output_audio,
+        ),
+    )
+
+    assert len(process_instances) == 1
+    process = process_instances[0]
+    assert process.kill_called
+    assert process.wait_called
+    assert process.communicate_calls == 2
+    assert not output_audio.exists()
     assert not temporary_outputs(tmp_path)
 
 
