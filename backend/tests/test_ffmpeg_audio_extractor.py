@@ -561,6 +561,67 @@ def test_failed_publication_cleans_temporary_output(
     assert not temporary_outputs(tmp_path)
 
 
+def test_cleanup_failure_does_not_hide_extraction_failure_or_publish_partial_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    input_video = make_mp4(tmp_path / "cleanup after failure.mp4")
+    output_audio = tmp_path / "cleanup after failure.wav"
+    original_rmtree = shutil.rmtree
+
+    def fail_ffmpeg(
+        command: list[str],
+        **_kwargs: object,
+    ) -> CompletedProcess[str]:
+        Path(command[-1]).write_bytes(b"partial output")
+        return CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="private decoder details",
+        )
+
+    def fail_cleanup(_path: Path) -> None:
+        raise OSError("private cleanup path details")
+
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.subprocess.run",
+        fail_ffmpeg,
+    )
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.shutil.rmtree",
+        fail_cleanup,
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="app.transcription.ffmpeg_audio_extractor",
+    ):
+        with pytest.raises(FFmpegAudioExtractionError) as raised:
+            FFmpegAudioExtractor().extract(input_video, output_audio)
+
+    assert raised.value.code is FFmpegAudioExtractionErrorCode.EXTRACTION_FAILED
+    assert str(tmp_path) not in str(raised.value)
+    assert "private decoder details" not in str(raised.value)
+    assert not output_audio.exists()
+    leftover_directories = temporary_outputs(tmp_path)
+    assert len(leftover_directories) == 1
+    assert (leftover_directories[0] / "extracted.wav").read_bytes() == (
+        b"partial output"
+    )
+    assert "Temporary FFmpeg extraction files could not be removed." in caplog.text
+    assert str(tmp_path) not in caplog.text
+    assert "private cleanup path details" not in caplog.text
+
+    monkeypatch.setattr(
+        "app.transcription.ffmpeg_audio_extractor.shutil.rmtree",
+        original_rmtree,
+    )
+    original_rmtree(leftover_directories[0])
+    assert not temporary_outputs(tmp_path)
+
+
 def test_output_verification_oserror_is_sanitized_and_cleaned(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -703,13 +764,16 @@ def test_cleanup_failure_after_publication_keeps_success_and_logs_warning(
     assert "Temporary FFmpeg extraction files could not be removed." in caplog.text
     assert str(tmp_path) not in caplog.text
     assert "private cleanup path details" not in caplog.text
+    leftover_directories = temporary_outputs(tmp_path)
+    assert len(leftover_directories) == 1
+    assert (leftover_directories[0] / "extracted.wav").is_file()
 
     monkeypatch.setattr(
         "app.transcription.ffmpeg_audio_extractor.shutil.rmtree",
         original_rmtree,
     )
-    for temporary_directory in temporary_outputs(tmp_path):
-        original_rmtree(temporary_directory)
+    original_rmtree(leftover_directories[0])
+    assert not temporary_outputs(tmp_path)
 
 
 @pytest.mark.parametrize(
