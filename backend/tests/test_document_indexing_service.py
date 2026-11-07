@@ -718,6 +718,103 @@ def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
     ]
 
 
+def test_transient_audio_failure_succeeds_on_eligible_retry_once(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
+    document_id, job_id, storage_key = create_uploaded_audio_document(
+        session_factory,
+        upload_root,
+        DocumentFileType.WAV,
+        "retry succeeds",
+    )
+
+    class FailOnceTranscriber:
+        def __init__(self) -> None:
+            self.requests: list[TranscriptionRequest] = []
+
+        def transcribe(
+            self,
+            request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                raise RuntimeError("controlled transient transcription failure")
+            return TranscriptionResult(
+                (TranscriptionSegment("Retry transcript.", 0.5, 1.5),)
+            )
+
+    transcriber = FailOnceTranscriber()
+    indexing_services: list[
+        tuple[DocumentIndexingService, FakeEmbeddingService, FakeVectorStore]
+    ] = []
+
+    def create_service(
+        _document_id: UUID,
+    ) -> DocumentIndexingService:
+        service_parts = make_audio_indexing_service(
+            session_factory,
+            upload_root,
+            transcriber,
+        )
+        indexing_services.append(service_parts)
+        return service_parts[0]
+
+    assert process_next_document_job(session_factory, create_service)
+    with session_factory() as session:
+        job = session.get(DocumentProcessingJob, job_id)
+        assert job is not None
+        assert job.status == DocumentProcessingJobStatus.QUEUED.value
+        assert job.attempts == 1
+    failed_document = get_document(session_factory, document_id)
+    assert failed_document.processing_status == DocumentStatus.FAILED.value
+    assert failed_document.processing_error_code == "processing_failed"
+    assert get_segments(session_factory, document_id) == []
+
+    with session_factory() as session:
+        with session.begin():
+            job = session.get(DocumentProcessingJob, job_id)
+            assert job is not None
+            job.available_at = datetime.now(UTC)
+
+    assert process_next_document_job(session_factory, create_service)
+    with session_factory() as session:
+        job = session.get(DocumentProcessingJob, job_id)
+        assert job is not None
+        assert job.status == DocumentProcessingJobStatus.COMPLETED.value
+        assert job.attempts == 2
+    completed_document = get_document(session_factory, document_id)
+    assert completed_document.processing_status == DocumentStatus.COMPLETED.value
+    assert completed_document.processing_error_code is None
+
+    segments = get_segments(session_factory, document_id)
+    assert len(segments) == 1
+    segment_id = segments[0].id
+    assert segments[0].text_content == "Retry transcript."
+    assert (segments[0].start_seconds, segments[0].end_seconds) == (0.5, 1.5)
+    assert [request.audio_path.name for request in transcriber.requests] == [
+        storage_key,
+        storage_key,
+    ]
+
+    assert len(indexing_services) == 2
+    assert indexing_services[0][1].calls == []
+    assert indexing_services[0][2].calls == []
+    successful_embedding = indexing_services[1][1]
+    successful_vector_store = indexing_services[1][2]
+    assert successful_embedding.calls == [("Retry transcript.",)]
+    assert len(successful_vector_store.calls) == 1
+    assert successful_vector_store.calls[0][0].metadata.segment_id == segment_id
+    assert successful_embedding.closed is True
+    assert successful_vector_store.closed is True
+
+    assert not process_next_document_job(session_factory, create_service)
+    assert len(transcriber.requests) == 2
+    assert len(indexing_services) == 2
+
+
 def test_lock_loss_during_failed_embedding_skips_failure_and_retry_writes(
     session_factory: sessionmaker[Session],
 ) -> None:
