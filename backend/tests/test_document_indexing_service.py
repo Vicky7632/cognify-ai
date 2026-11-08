@@ -3,11 +3,14 @@ from __future__ import annotations
 from contextlib import nullcontext
 from collections.abc import Callable, Generator, Sequence
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from numbers import Real
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -92,8 +95,24 @@ def create_uploaded_audio_document(
     file_type: DocumentFileType,
     filename: str,
 ) -> tuple[UUID, UUID, str]:
+    return create_uploaded_file_document(
+        session_factory,
+        upload_root,
+        file_type,
+        filename,
+        b"fake audio bytes",
+    )
+
+
+def create_uploaded_file_document(
+    session_factory: sessionmaker[Session],
+    upload_root: Path,
+    file_type: DocumentFileType,
+    filename: str,
+    content: bytes,
+) -> tuple[UUID, UUID, str]:
     storage_key = f"{uuid4().hex}.{file_type.value}"
-    (upload_root / storage_key).write_bytes(b"fake audio bytes")
+    (upload_root / storage_key).write_bytes(content)
     with session_factory() as session:
         with session.begin():
             document = create_document(
@@ -108,6 +127,34 @@ def create_uploaded_audio_document(
                 document.id,
             )
             return document.id, job.id, storage_key
+
+
+def make_pdf_with_text(text: str) -> bytes:
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    font_reference = writer._add_object(font)
+    page[NameObject("/Resources")] = DictionaryObject(
+        {
+            NameObject("/Font"): DictionaryObject(
+                {NameObject("/F1"): font_reference}
+            )
+        }
+    )
+    content = DecodedStreamObject()
+    content.set_data(
+        f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("ascii")
+    )
+    page[NameObject("/Contents")] = writer._add_object(content)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
 
 
 def make_audio_indexing_service(
@@ -606,6 +653,210 @@ def test_background_worker_transcribes_mp3_and_wav_and_persists_segments(
             assert job is not None
             assert job.status == DocumentProcessingJobStatus.COMPLETED.value
             assert job.attempts == 1
+    assert lock_connection.unlock_attempts == 1
+
+
+def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
+    files = (
+        (
+            DocumentFileType.PDF,
+            "lesson-pdf",
+            make_pdf_with_text("PDF worker text."),
+        ),
+        (DocumentFileType.MP4, "unsupported-mp4", b"video placeholder"),
+        (DocumentFileType.TXT, "lesson-txt", b"TXT worker text."),
+        (DocumentFileType.MP3, "lesson-mp3", b"fake MP3 audio"),
+        (DocumentFileType.WAV, "lesson-wav", b"fake WAV audio"),
+    )
+    uploaded: list[tuple[UUID, UUID, DocumentFileType, str]] = []
+    for index, (file_type, filename, content) in enumerate(files):
+        uploaded_file = create_uploaded_file_document(
+            session_factory,
+            upload_root,
+            file_type,
+            filename,
+            content,
+        )
+        uploaded.append((*uploaded_file[:2], file_type, uploaded_file[2]))
+        with session_factory() as session:
+            with session.begin():
+                job = session.get(DocumentProcessingJob, uploaded_file[1])
+                assert job is not None
+                job.created_at = datetime.now(UTC) + timedelta(seconds=index)
+
+    settings = Settings(
+        upload_root=upload_root,
+        transcription_model_path=tmp_path / "model",
+        _env_file=None,
+    )
+    monkeypatch.setattr(document_worker, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        document_worker,
+        "_advisory_lock_is_held",
+        lambda *_args: True,
+    )
+
+    processing_order: list[DocumentFileType] = []
+    original_processor = LocalDocumentProcessor
+
+    class TrackingLocalDocumentProcessor:
+        def __init__(self, root: Path, transcriber=None) -> None:
+            self._processor = original_processor(root, transcriber)
+
+        def process(
+            self,
+            processing_input: DocumentProcessingInput,
+        ) -> ProcessingResult:
+            processing_order.append(processing_input.file_type)
+            return self._processor.process(processing_input)
+
+    monkeypatch.setattr(
+        document_worker,
+        "LocalDocumentProcessor",
+        TrackingLocalDocumentProcessor,
+    )
+
+    expected_audio = {
+        DocumentFileType.MP3: ("MP3 worker transcript.", 0.25, 1.25),
+        DocumentFileType.WAV: ("WAV worker transcript.", 1.5, 2.5),
+    }
+
+    class FakeTranscriber:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            self.requests: list[TranscriptionRequest] = []
+
+        def transcribe(
+            self,
+            request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            self.requests.append(request)
+            text, start_seconds, end_seconds = expected_audio[request.file_type]
+            return TranscriptionResult(
+                (TranscriptionSegment(text, start_seconds, end_seconds),)
+            )
+
+    transcribers: list[FakeTranscriber] = []
+
+    def create_transcriber(*args: object, **kwargs: object) -> FakeTranscriber:
+        transcriber = FakeTranscriber(*args, **kwargs)
+        transcribers.append(transcriber)
+        return transcriber
+
+    monkeypatch.setattr(
+        document_worker,
+        "FasterWhisperTranscriber",
+        create_transcriber,
+    )
+
+    embeddings: list[FakeEmbeddingService] = []
+    vector_stores: list[FakeVectorStore] = []
+
+    def create_embedding(_settings: Settings) -> FakeEmbeddingService:
+        embedding = FakeEmbeddingService()
+        embeddings.append(embedding)
+        return embedding
+
+    def create_vector_store(_settings: Settings) -> FakeVectorStore:
+        vector_store = FakeVectorStore()
+        vector_stores.append(vector_store)
+        return vector_store
+
+    monkeypatch.setattr(
+        document_worker,
+        "create_embedding_service",
+        create_embedding,
+    )
+    monkeypatch.setattr(
+        document_worker,
+        "create_pinecone_vector_store",
+        create_vector_store,
+    )
+
+    supported = [item for item in uploaded if item[2] is not DocumentFileType.MP4]
+    unsupported = next(
+        item for item in uploaded if item[2] is DocumentFileType.MP4
+    )
+    lock_connection = FakeWorkerLockConnection()
+
+    def all_jobs_reached_expected_state() -> bool:
+        with session_factory() as session:
+            supported_jobs = [
+                session.get(DocumentProcessingJob, item[1])
+                for item in supported
+            ]
+            unsupported_job = session.get(DocumentProcessingJob, unsupported[1])
+        return (
+            all(
+                job is not None
+                and job.status == DocumentProcessingJobStatus.COMPLETED.value
+                for job in supported_jobs
+            )
+            and unsupported_job is not None
+            and unsupported_job.attempts == 1
+            and unsupported_job.status == DocumentProcessingJobStatus.QUEUED.value
+        )
+
+    document_worker.run_worker(
+        FakeWorkerEngine(lock_connection),
+        session_factory,
+        stop_requested=all_jobs_reached_expected_state,
+    )
+
+    assert processing_order == [item[2] for item in uploaded]
+    assert len(transcribers) == 1
+    assert [request.file_type for request in transcribers[0].requests] == [
+        DocumentFileType.MP3,
+        DocumentFileType.WAV,
+    ]
+
+    for document_id, job_id, file_type, _storage_key in supported:
+        document = get_document(session_factory, document_id)
+        assert document.processing_status == DocumentStatus.COMPLETED.value
+        assert document.processing_error_code is None
+        with session_factory() as session:
+            job = session.get(DocumentProcessingJob, job_id)
+            assert job is not None
+            assert job.status == DocumentProcessingJobStatus.COMPLETED.value
+            assert job.attempts == 1
+
+        segments = get_segments(session_factory, document_id)
+        assert len(segments) == 1
+        if file_type is DocumentFileType.PDF:
+            assert segments[0].text_content == "PDF worker text."
+            assert segments[0].page_number == 1
+            assert segments[0].start_seconds is None
+        elif file_type is DocumentFileType.TXT:
+            assert segments[0].text_content == "TXT worker text."
+            assert segments[0].page_number is None
+            assert segments[0].start_seconds is None
+        else:
+            expected_text, start_seconds, end_seconds = expected_audio[file_type]
+            assert segments[0].text_content == expected_text
+            assert (
+                segments[0].start_seconds,
+                segments[0].end_seconds,
+            ) == (start_seconds, end_seconds)
+
+    unsupported_document = get_document(session_factory, unsupported[0])
+    assert unsupported_document.processing_status == DocumentStatus.FAILED.value
+    assert unsupported_document.processing_error_code == "processing_failed"
+    assert get_segments(session_factory, unsupported[0]) == []
+    with session_factory() as session:
+        unsupported_job = session.get(DocumentProcessingJob, unsupported[1])
+        assert unsupported_job is not None
+        assert unsupported_job.status == DocumentProcessingJobStatus.QUEUED.value
+        assert unsupported_job.attempts == 1
+
+    assert len(embeddings) == len(supported)
+    assert len(vector_stores) == len(supported)
+    assert all(embedding.closed for embedding in embeddings)
+    assert all(vector_store.closed for vector_store in vector_stores)
     assert lock_connection.unlock_attempts == 1
 
 
