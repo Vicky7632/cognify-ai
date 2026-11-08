@@ -54,7 +54,7 @@ def test_document_has_uuid_and_pending_status_defaults() -> None:
 def test_document_constraints_limit_file_types_and_processing_statuses() -> None:
     constraints = {
         constraint.name: str(constraint.sqltext)
-        for constraint in Document.__table__.constraints
+        for constraint in Base.metadata.tables["documents"].constraints
         if isinstance(constraint, CheckConstraint)
     }
 

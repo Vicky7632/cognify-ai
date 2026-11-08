@@ -28,7 +28,10 @@ from app.schemas.document import (
     to_document_response,
     validate_document_filename,
 )
-from app.schemas.document_segment import DocumentSegmentListResponse
+from app.schemas.document_segment import (
+    DocumentSegmentListResponse,
+    DocumentSegmentResponse,
+)
 from app.services import document_service
 from app.services.document_service import InvalidDocumentTransitionError
 from app.services.file_storage import (
@@ -225,7 +228,10 @@ def get_document_segments(
         ) from None
 
     return DocumentSegmentListResponse(
-        segments=segments,
+        segments=[
+            DocumentSegmentResponse.model_validate(segment)
+            for segment in segments
+        ],
         total=total,
         limit=limit,
         offset=offset,
