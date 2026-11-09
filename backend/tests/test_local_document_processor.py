@@ -26,6 +26,8 @@ from app.services.document_processor import (
 )
 from app.services.local_document_processor import LocalDocumentProcessor
 from app.transcription import (
+    TranscriptionError,
+    TranscriptionErrorCode,
     TranscriptionRequest,
     TranscriptionResult,
     TranscriptionSegment,
@@ -252,17 +254,122 @@ def test_audio_transcription_preserves_text_and_timestamps(
     ]
 
 
-def test_mp4_remains_unsupported_even_with_transcriber(
+def test_mp4_extracts_and_transcribes_with_wav_timestamps_and_cleanup(
     upload_root: Path,
 ) -> None:
-    storage_key = write_upload(upload_root, "mp4", b"\x00\x00\x00\x18ftypisom")
+    storage_key = write_upload(upload_root, "mp4", b"original video")
+    expected = TranscriptionResult(
+        (
+            TranscriptionSegment("Video transcript.", 1.25, 2.5),
+            TranscriptionSegment("Next segment.", 3.0, 4.25),
+        )
+    )
 
-    class UnexpectedTranscriber:
-        def transcribe(self, _request: TranscriptionRequest) -> TranscriptionResult:
-            pytest.fail("MP4 must not be sent to the audio transcriber.")
+    class FakeAudioExtractor:
+        def __init__(self) -> None:
+            self.input_video: Path | None = None
+            self.output_audio: Path | None = None
+
+        def extract(self, input_video: Path, output_audio: Path) -> Path:
+            self.input_video = input_video
+            self.output_audio = output_audio
+            output_audio.write_bytes(b"extracted audio")
+            return output_audio
+
+    class FakeTranscriber:
+        def __init__(self) -> None:
+            self.request: TranscriptionRequest | None = None
+            self.audio_bytes: bytes | None = None
+
+        def transcribe(
+            self,
+            request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            self.request = request
+            assert request.audio_path.is_file()
+            self.audio_bytes = request.audio_path.read_bytes()
+            return expected
+
+    audio_extractor = FakeAudioExtractor()
+    transcriber = FakeTranscriber()
+    result = LocalDocumentProcessor(
+        upload_root,
+        transcriber,
+        audio_extractor=audio_extractor,
+    ).process(
+        make_input(storage_key, DocumentFileType.MP4),
+    )
+
+    assert audio_extractor.input_video == upload_root / storage_key
+    assert audio_extractor.output_audio is not None
+    assert audio_extractor.output_audio.suffix == ".wav"
+    assert audio_extractor.output_audio.parent.name.startswith("cognify-mp4-")
+    assert transcriber.request is not None
+    assert transcriber.request.file_type is DocumentFileType.WAV
+    assert transcriber.request.audio_path == audio_extractor.output_audio
+    assert transcriber.audio_bytes == b"extracted audio"
+    assert [
+        (
+            segment.text,
+            segment.page_number,
+            segment.start_seconds,
+            segment.end_seconds,
+        )
+        for segment in result.segments
+    ] == [
+        ("Video transcript.", None, 1.25, 2.5),
+        ("Next segment.", None, 3.0, 4.25),
+    ]
+    assert not audio_extractor.output_audio.parent.exists()
+    assert (upload_root / storage_key).read_bytes() == b"original video"
+
+
+@pytest.mark.parametrize("failure", ["extract", "transcribe", "empty"])
+def test_mp4_failures_clean_temporary_audio(
+    upload_root: Path,
+    failure: str,
+) -> None:
+    storage_key = write_upload(upload_root, "mp4", b"original video")
+
+    class FakeAudioExtractor:
+        output_audio: Path | None = None
+
+        def extract(self, _input_video: Path, output_audio: Path) -> Path:
+            self.output_audio = output_audio
+            if failure == "extract":
+                raise RuntimeError("controlled extraction failure")
+            output_audio.write_bytes(b"extracted audio")
+            return output_audio
+
+    class FakeTranscriber:
+        def transcribe(
+            self,
+            _request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            if failure == "transcribe":
+                raise RuntimeError("controlled transcription failure")
+            raise TranscriptionError(TranscriptionErrorCode.INVALID_TRANSCRIPTION)
+
+    audio_extractor = FakeAudioExtractor()
+    expect_safe_failure(
+        LocalDocumentProcessor(
+            upload_root,
+            FakeTranscriber(),
+            audio_extractor=audio_extractor,
+        ),
+        make_input(storage_key, DocumentFileType.MP4),
+    )
+
+    assert audio_extractor.output_audio is not None
+    assert not audio_extractor.output_audio.parent.exists()
+    assert (upload_root / storage_key).read_bytes() == b"original video"
+
+
+def test_mp4_without_extractor_fails_safely(upload_root: Path) -> None:
+    storage_key = write_upload(upload_root, "mp4", b"original video")
 
     expect_safe_failure(
-        LocalDocumentProcessor(upload_root, UnexpectedTranscriber()),
+        LocalDocumentProcessor(upload_root),
         make_input(storage_key, DocumentFileType.MP4),
     )
 

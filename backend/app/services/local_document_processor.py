@@ -1,4 +1,5 @@
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from pypdf import PdfReader
 
@@ -14,18 +15,22 @@ from app.transcription import (
     Transcriber,
     TranscriptionRequest,
 )
+from app.transcription.ffmpeg_audio_extractor import FFmpegAudioExtractor
 
 
 class LocalDocumentProcessor:
-    """Extract PDF pages and strict UTF-8 text from files in the upload root."""
+    """Extract or transcribe supported documents from the upload root."""
 
     def __init__(
         self,
         upload_root: Path,
         transcriber: Transcriber | None = None,
+        *,
+        audio_extractor: FFmpegAudioExtractor | None = None,
     ) -> None:
         self._upload_root = upload_root
         self._transcriber = transcriber
+        self._audio_extractor = audio_extractor
 
     def process(self, document: DocumentProcessingInput) -> ProcessingResult:
         try:
@@ -35,6 +40,7 @@ class LocalDocumentProcessor:
                 DocumentFileType.TXT,
                 DocumentFileType.MP3,
                 DocumentFileType.WAV,
+                DocumentFileType.MP4,
             ):
                 raise DocumentProcessingError(
                     DocumentProcessingErrorCode.PROCESSING_FAILED
@@ -48,29 +54,48 @@ class LocalDocumentProcessor:
                 return self._process_pdf(path)
             if file_type is DocumentFileType.TXT:
                 return self._process_text(path)
-            if self._transcriber is None:
-                raise DocumentProcessingError(
-                    DocumentProcessingErrorCode.PROCESSING_FAILED
-                )
-            result = self._transcriber.transcribe(
-                TranscriptionRequest(audio_path=path, file_type=file_type)
-            )
-            return ProcessingResult(
-                segments=tuple(
-                    ProcessedSegment(
-                        text=segment.text,
-                        start_seconds=segment.start_seconds,
-                        end_seconds=segment.end_seconds,
-                    )
-                    for segment in result.segments
-                )
-            )
+            if file_type is DocumentFileType.MP4:
+                return self._process_mp4(path)
+            return self._transcribe(path, file_type)
         except DocumentProcessingError:
             raise
         except Exception as error:
             raise DocumentProcessingError(
                 DocumentProcessingErrorCode.PROCESSING_FAILED
             ) from error
+
+    def _process_mp4(self, path: Path) -> ProcessingResult:
+        if self._audio_extractor is None:
+            raise DocumentProcessingError(
+                DocumentProcessingErrorCode.PROCESSING_FAILED
+            )
+        with TemporaryDirectory(prefix="cognify-mp4-") as temporary_directory:
+            audio_path = Path(temporary_directory) / "extracted.wav"
+            self._audio_extractor.extract(path, audio_path)
+            return self._transcribe(audio_path, DocumentFileType.WAV)
+
+    def _transcribe(
+        self,
+        audio_path: Path,
+        file_type: DocumentFileType,
+    ) -> ProcessingResult:
+        if self._transcriber is None:
+            raise DocumentProcessingError(
+                DocumentProcessingErrorCode.PROCESSING_FAILED
+            )
+        result = self._transcriber.transcribe(
+            TranscriptionRequest(audio_path=audio_path, file_type=file_type)
+        )
+        return ProcessingResult(
+            segments=tuple(
+                ProcessedSegment(
+                    text=segment.text,
+                    start_seconds=segment.start_seconds,
+                    end_seconds=segment.end_seconds,
+                )
+                for segment in result.segments
+            )
+        )
 
     @staticmethod
     def _process_text(path: Path) -> ProcessingResult:

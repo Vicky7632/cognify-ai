@@ -161,12 +161,17 @@ def make_audio_indexing_service(
     session_factory: sessionmaker[Session],
     upload_root: Path,
     transcriber,
+    audio_extractor=None,
 ) -> tuple[DocumentIndexingService, FakeEmbeddingService, FakeVectorStore]:
     embedding = FakeEmbeddingService()
     vector_store = FakeVectorStore()
     service = DocumentIndexingService(
         session_factory,
-        LocalDocumentProcessor(upload_root, transcriber),
+        LocalDocumentProcessor(
+            upload_root,
+            transcriber,
+            audio_extractor=audio_extractor,
+        ),
         lambda: DocumentVectorStorageService(
             DocumentEmbeddingService(embedding),
             vector_store,
@@ -656,7 +661,7 @@ def test_background_worker_transcribes_mp3_and_wav_and_persists_segments(
     assert lock_connection.unlock_attempts == 1
 
 
-def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
+def test_worker_processes_supported_formats_sequentially_including_mp4(
     session_factory: sessionmaker[Session],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -669,7 +674,7 @@ def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
             "lesson-pdf",
             make_pdf_with_text("PDF worker text."),
         ),
-        (DocumentFileType.MP4, "unsupported-mp4", b"video placeholder"),
+        (DocumentFileType.MP4, "lesson-mp4", b"video placeholder"),
         (DocumentFileType.TXT, "lesson-txt", b"TXT worker text."),
         (DocumentFileType.MP3, "lesson-mp3", b"fake MP3 audio"),
         (DocumentFileType.WAV, "lesson-wav", b"fake WAV audio"),
@@ -706,8 +711,18 @@ def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
     original_processor = LocalDocumentProcessor
 
     class TrackingLocalDocumentProcessor:
-        def __init__(self, root: Path, transcriber=None) -> None:
-            self._processor = original_processor(root, transcriber)
+        def __init__(
+            self,
+            root: Path,
+            transcriber=None,
+            *,
+            audio_extractor=None,
+        ) -> None:
+            self._processor = original_processor(
+                root,
+                transcriber,
+                audio_extractor=audio_extractor,
+            )
 
         def process(
             self,
@@ -725,6 +740,7 @@ def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
     expected_audio = {
         DocumentFileType.MP3: ("MP3 worker transcript.", 0.25, 1.25),
         DocumentFileType.WAV: ("WAV worker transcript.", 1.5, 2.5),
+        DocumentFileType.MP4: ("MP4 worker transcript.", 2.0, 3.0),
     }
 
     class FakeTranscriber:
@@ -736,7 +752,19 @@ def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
             request: TranscriptionRequest,
         ) -> TranscriptionResult:
             self.requests.append(request)
-            text, start_seconds, end_seconds = expected_audio[request.file_type]
+            audio_bytes = request.audio_path.read_bytes()
+            if audio_bytes == b"MP4 extracted audio":
+                text, start_seconds, end_seconds = expected_audio[
+                    DocumentFileType.MP4
+                ]
+            elif audio_bytes == b"fake MP3 audio":
+                text, start_seconds, end_seconds = expected_audio[
+                    DocumentFileType.MP3
+                ]
+            else:
+                text, start_seconds, end_seconds = expected_audio[
+                    DocumentFileType.WAV
+                ]
             return TranscriptionResult(
                 (TranscriptionSegment(text, start_seconds, end_seconds),)
             )
@@ -752,6 +780,31 @@ def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
         document_worker,
         "FasterWhisperTranscriber",
         create_transcriber,
+    )
+
+    extracted_paths: list[Path] = []
+
+    class FakeAudioExtractor:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Path, Path]] = []
+
+        def extract(self, input_video: Path, output_audio: Path) -> Path:
+            self.calls.append((input_video, output_audio))
+            extracted_paths.append(output_audio)
+            output_audio.write_bytes(b"MP4 extracted audio")
+            return output_audio
+
+    audio_extractors: list[FakeAudioExtractor] = []
+
+    def create_audio_extractor() -> FakeAudioExtractor:
+        extractor = FakeAudioExtractor()
+        audio_extractors.append(extractor)
+        return extractor
+
+    monkeypatch.setattr(
+        document_worker,
+        "FFmpegAudioExtractor",
+        create_audio_extractor,
     )
 
     embeddings: list[FakeEmbeddingService] = []
@@ -778,10 +831,7 @@ def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
         create_vector_store,
     )
 
-    supported = [item for item in uploaded if item[2] is not DocumentFileType.MP4]
-    unsupported = next(
-        item for item in uploaded if item[2] is DocumentFileType.MP4
-    )
+    supported = uploaded
     lock_connection = FakeWorkerLockConnection()
 
     def all_jobs_reached_expected_state() -> bool:
@@ -790,16 +840,12 @@ def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
                 session.get(DocumentProcessingJob, item[1])
                 for item in supported
             ]
-            unsupported_job = session.get(DocumentProcessingJob, unsupported[1])
         return (
             all(
                 job is not None
                 and job.status == DocumentProcessingJobStatus.COMPLETED.value
                 for job in supported_jobs
             )
-            and unsupported_job is not None
-            and unsupported_job.attempts == 1
-            and unsupported_job.status == DocumentProcessingJobStatus.QUEUED.value
         )
 
     document_worker.run_worker(
@@ -811,9 +857,16 @@ def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
     assert processing_order == [item[2] for item in uploaded]
     assert len(transcribers) == 1
     assert [request.file_type for request in transcribers[0].requests] == [
+        DocumentFileType.WAV,
         DocumentFileType.MP3,
         DocumentFileType.WAV,
     ]
+    assert len(audio_extractors) == 1
+    assert len(audio_extractors[0].calls) == 1
+    assert audio_extractors[0].calls[0][0] == upload_root / uploaded[1][3]
+    assert audio_extractors[0].calls[0][1].suffix == ".wav"
+    assert not extracted_paths[0].parent.exists()
+    assert (upload_root / uploaded[1][3]).exists()
 
     for document_id, job_id, file_type, _storage_key in supported:
         document = get_document(session_factory, document_id)
@@ -842,16 +895,6 @@ def test_worker_processes_supported_formats_sequentially_and_rejects_mp4(
                 segments[0].start_seconds,
                 segments[0].end_seconds,
             ) == (start_seconds, end_seconds)
-
-    unsupported_document = get_document(session_factory, unsupported[0])
-    assert unsupported_document.processing_status == DocumentStatus.FAILED.value
-    assert unsupported_document.processing_error_code == "processing_failed"
-    assert get_segments(session_factory, unsupported[0]) == []
-    with session_factory() as session:
-        unsupported_job = session.get(DocumentProcessingJob, unsupported[1])
-        assert unsupported_job is not None
-        assert unsupported_job.status == DocumentProcessingJobStatus.QUEUED.value
-        assert unsupported_job.attempts == 1
 
     assert len(embeddings) == len(supported)
     assert len(vector_stores) == len(supported)
@@ -966,6 +1009,130 @@ def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
         successful_storage_key,
         failed_storage_key,
         failed_storage_key,
+    ]
+
+
+def test_failed_mp4_job_retries_without_blocking_next_queued_job(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
+    failed_document_id, failed_job_id, failed_storage_key = (
+        create_uploaded_audio_document(
+            session_factory,
+            upload_root,
+            DocumentFileType.MP4,
+            "fails",
+        )
+    )
+    successful_document_id, successful_job_id, _successful_storage_key = (
+        create_uploaded_audio_document(
+            session_factory,
+            upload_root,
+            DocumentFileType.WAV,
+            "succeeds",
+        )
+    )
+    (upload_root / failed_storage_key).write_bytes(b"fake MP4 video")
+
+    with session_factory() as session:
+        with session.begin():
+            failed_job = session.get(DocumentProcessingJob, failed_job_id)
+            successful_job = session.get(DocumentProcessingJob, successful_job_id)
+            assert failed_job is not None
+            assert successful_job is not None
+            successful_job.created_at = datetime.now(UTC)
+            failed_job.created_at = successful_job.created_at - timedelta(seconds=2)
+
+    extracted_paths: list[Path] = []
+
+    class FakeAudioExtractor:
+        def extract(self, _input_video: Path, output_audio: Path) -> Path:
+            extracted_paths.append(output_audio)
+            output_audio.write_bytes(b"failed MP4 audio")
+            return output_audio
+
+    class FakeTranscriber:
+        def __init__(self) -> None:
+            self.requests: list[TranscriptionRequest] = []
+
+        def transcribe(
+            self,
+            request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            self.requests.append(request)
+            if request.audio_path.read_bytes() == b"failed MP4 audio":
+                raise RuntimeError("controlled MP4 transcription failure")
+            return TranscriptionResult(
+                (TranscriptionSegment("Following WAV transcript.", 0.5, 1.5),)
+            )
+
+    audio_extractor = FakeAudioExtractor()
+    transcriber = FakeTranscriber()
+
+    def create_service(_document_id: UUID) -> DocumentIndexingService:
+        return make_audio_indexing_service(
+            session_factory,
+            upload_root,
+            transcriber,
+            audio_extractor=audio_extractor,
+        )[0]
+
+    assert process_next_document_job(session_factory, create_service)
+    with session_factory() as session:
+        failed_job = session.get(DocumentProcessingJob, failed_job_id)
+        assert failed_job is not None
+        assert failed_job.status == DocumentProcessingJobStatus.QUEUED.value
+        assert failed_job.attempts == 1
+    assert get_document(session_factory, failed_document_id).processing_status == (
+        DocumentStatus.FAILED.value
+    )
+    assert extracted_paths and not extracted_paths[-1].parent.exists()
+    assert (upload_root / failed_storage_key).read_bytes() == b"fake MP4 video"
+
+    assert process_next_document_job(session_factory, create_service)
+    with session_factory() as session:
+        successful_job = session.get(DocumentProcessingJob, successful_job_id)
+        assert successful_job is not None
+        assert successful_job.status == DocumentProcessingJobStatus.COMPLETED.value
+        assert successful_job.attempts == 1
+    assert [
+        segment.text_content
+        for segment in get_segments(session_factory, successful_document_id)
+    ] == ["Following WAV transcript."]
+
+    for _ in range(
+        document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS - 1
+    ):
+        with session_factory() as session:
+            with session.begin():
+                failed_job = session.get(DocumentProcessingJob, failed_job_id)
+                assert failed_job is not None
+                failed_job.available_at = datetime.now(UTC)
+        assert process_next_document_job(session_factory, create_service)
+        assert not extracted_paths[-1].parent.exists()
+
+    with session_factory() as session:
+        failed_job = session.get(DocumentProcessingJob, failed_job_id)
+        assert failed_job is not None
+        assert failed_job.status == DocumentProcessingJobStatus.FAILED.value
+        assert failed_job.attempts == (
+            document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS
+        )
+    assert get_document(session_factory, failed_document_id).processing_status == (
+        DocumentStatus.FAILED.value
+    )
+    assert get_segments(session_factory, failed_document_id) == []
+    assert len(extracted_paths) == (
+        document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS
+    )
+    assert all(not path.parent.exists() for path in extracted_paths)
+    assert [request.file_type for request in transcriber.requests] == [
+        DocumentFileType.WAV,
+        DocumentFileType.WAV,
+        DocumentFileType.WAV,
+        DocumentFileType.WAV,
     ]
 
 
