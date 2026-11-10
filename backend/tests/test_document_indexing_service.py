@@ -55,6 +55,8 @@ from app.vector_store.protocol import (
     VectorStoreError,
 )
 from app.transcription import (
+    TranscriptionError,
+    TranscriptionErrorCode,
     TranscriptionRequest,
     TranscriptionResult,
     TranscriptionSegment,
@@ -976,12 +978,22 @@ def test_invalid_pdf_and_txt_jobs_fail_without_segments(
     assert vector_store.calls == []
 
 
+@pytest.mark.parametrize(
+    "failed_file_type",
+    [DocumentFileType.MP3, DocumentFileType.WAV],
+)
 def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
     session_factory: sessionmaker[Session],
     tmp_path: Path,
+    failed_file_type: DocumentFileType,
 ) -> None:
     upload_root = tmp_path / "uploads"
     upload_root.mkdir()
+    successful_file_type = (
+        DocumentFileType.WAV
+        if failed_file_type is DocumentFileType.MP3
+        else DocumentFileType.MP3
+    )
     (
         failed_document_id,
         failed_job_id,
@@ -989,8 +1001,8 @@ def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
     ) = create_uploaded_audio_document(
         session_factory,
         upload_root,
-        DocumentFileType.MP3,
-        "fails",
+        failed_file_type,
+        f"fails-{failed_file_type.value}",
     )
     (
         successful_document_id,
@@ -999,8 +1011,8 @@ def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
     ) = create_uploaded_audio_document(
         session_factory,
         upload_root,
-        DocumentFileType.WAV,
-        "succeeds",
+        successful_file_type,
+        f"succeeds-{successful_file_type.value}",
     )
     with session_factory() as session:
         with session.begin():
@@ -1021,19 +1033,26 @@ def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
         ) -> TranscriptionResult:
             self.requests.append(request)
             if request.audio_path.name == failed_storage_key:
-                raise RuntimeError("controlled transcription failure")
+                raise TranscriptionError(
+                    TranscriptionErrorCode.INVALID_TRANSCRIPTION
+                )
             return TranscriptionResult(
                 (TranscriptionSegment("Recovered transcript.", 0.0, 1.0),)
             )
 
     transcriber = FakeTranscriber()
+    indexing_services: list[
+        tuple[DocumentIndexingService, FakeEmbeddingService, FakeVectorStore]
+    ] = []
 
     def create_service(_document_id: UUID) -> DocumentIndexingService:
-        return make_audio_indexing_service(
+        service_parts = make_audio_indexing_service(
             session_factory,
             upload_root,
             transcriber,
-        )[0]
+        )
+        indexing_services.append(service_parts)
+        return service_parts[0]
 
     assert process_next_document_job(session_factory, create_service)
     with session_factory() as session:
@@ -1041,9 +1060,19 @@ def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
         assert failed_job is not None
         assert failed_job.status == DocumentProcessingJobStatus.QUEUED.value
         assert failed_job.attempts == 1
+        assert failed_job.available_at is not None
+        assert failed_job.available_at.replace(tzinfo=UTC) > datetime.now(UTC)
     assert get_document(session_factory, failed_document_id).processing_status == (
         DocumentStatus.FAILED.value
     )
+    assert get_document(
+        session_factory,
+        failed_document_id,
+    ).processing_error_code == "processing_failed"
+    assert get_segments(session_factory, failed_document_id) == []
+    assert [request.file_type for request in transcriber.requests] == [
+        failed_file_type
+    ]
 
     assert process_next_document_job(session_factory, create_service)
     with session_factory() as session:
@@ -1055,9 +1084,11 @@ def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
         segment.text_content
         for segment in get_segments(session_factory, successful_document_id)
     ] == ["Recovered transcript."]
+    assert transcriber.requests[1].file_type is successful_file_type
 
-    for _ in range(
-        document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS - 1
+    for expected_attempt in range(
+        2,
+        document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS + 1,
     ):
         with session_factory() as session:
             with session.begin():
@@ -1065,6 +1096,16 @@ def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
                 assert failed_job is not None
                 failed_job.available_at = datetime.now(UTC)
         assert process_next_document_job(session_factory, create_service)
+        with session_factory() as session:
+            failed_job = session.get(DocumentProcessingJob, failed_job_id)
+            assert failed_job is not None
+            assert failed_job.attempts == expected_attempt
+            assert failed_job.status == (
+                DocumentProcessingJobStatus.QUEUED.value
+                if expected_attempt
+                < document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS
+                else DocumentProcessingJobStatus.FAILED.value
+            )
 
     with session_factory() as session:
         failed_job = session.get(DocumentProcessingJob, failed_job_id)
@@ -1083,6 +1124,25 @@ def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
         failed_storage_key,
         failed_storage_key,
     ]
+    assert [request.file_type for request in transcriber.requests] == [
+        failed_file_type,
+        successful_file_type,
+        failed_file_type,
+        failed_file_type,
+    ]
+    assert len(indexing_services) == (
+        document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS + 1
+    )
+    successful_service_index = 1
+    assert all(
+        not embedding.calls and not vector_store.calls
+        for index, (_, embedding, vector_store) in enumerate(indexing_services)
+        if index != successful_service_index
+    )
+    successful_embedding = indexing_services[successful_service_index][1]
+    successful_vector_store = indexing_services[successful_service_index][2]
+    assert len(successful_embedding.calls) == 1
+    assert len(successful_vector_store.calls) == 1
 
 
 def test_failed_mp4_job_retries_without_blocking_next_queued_job(
