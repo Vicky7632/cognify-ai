@@ -59,6 +59,10 @@ from app.transcription import (
     TranscriptionResult,
     TranscriptionSegment,
 )
+from app.transcription.ffmpeg_audio_extractor import (
+    FFmpegAudioExtractionError,
+    FFmpegAudioExtractionErrorCode,
+)
 
 
 @pytest.fixture
@@ -1203,6 +1207,166 @@ def test_failed_mp4_job_retries_without_blocking_next_queued_job(
         DocumentFileType.WAV,
         DocumentFileType.WAV,
     ]
+
+
+def test_mp4_extraction_failure_retries_without_blocking_next_queued_job(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
+    failed_document_id, failed_job_id, failed_storage_key = (
+        create_uploaded_audio_document(
+            session_factory,
+            upload_root,
+            DocumentFileType.MP4,
+            "fails",
+        )
+    )
+    successful_document_id, successful_job_id, successful_storage_key = (
+        create_uploaded_audio_document(
+            session_factory,
+            upload_root,
+            DocumentFileType.WAV,
+            "succeeds",
+        )
+    )
+    original_video = b"original MP4 video"
+    (upload_root / failed_storage_key).write_bytes(original_video)
+
+    with session_factory() as session:
+        with session.begin():
+            failed_job = session.get(DocumentProcessingJob, failed_job_id)
+            successful_job = session.get(DocumentProcessingJob, successful_job_id)
+            assert failed_job is not None
+            assert successful_job is not None
+            successful_job.created_at = datetime.now(UTC)
+            failed_job.created_at = successful_job.created_at - timedelta(seconds=2)
+
+    extraction_attempts: list[tuple[Path, Path]] = []
+
+    class FailingAudioExtractor:
+        def extract(self, input_video: Path, output_audio: Path) -> Path:
+            extraction_attempts.append((input_video, output_audio))
+            output_audio.write_bytes(b"partial WAV output")
+            raise FFmpegAudioExtractionError(
+                FFmpegAudioExtractionErrorCode.EXTRACTION_FAILED
+            )
+
+    class FakeTranscriber:
+        def __init__(self) -> None:
+            self.requests: list[TranscriptionRequest] = []
+
+        def transcribe(
+            self,
+            request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            self.requests.append(request)
+            return TranscriptionResult(
+                (TranscriptionSegment("Following WAV transcript.", 0.5, 1.5),)
+            )
+
+    audio_extractor = FailingAudioExtractor()
+    transcriber = FakeTranscriber()
+    indexing_services: list[
+        tuple[DocumentIndexingService, FakeEmbeddingService, FakeVectorStore]
+    ] = []
+
+    def create_service(_document_id: UUID) -> DocumentIndexingService:
+        service_parts = make_audio_indexing_service(
+            session_factory,
+            upload_root,
+            transcriber,
+            audio_extractor=audio_extractor,
+        )
+        indexing_services.append(service_parts)
+        return service_parts[0]
+
+    assert process_next_document_job(session_factory, create_service)
+    with session_factory() as session:
+        failed_job = session.get(DocumentProcessingJob, failed_job_id)
+        assert failed_job is not None
+        assert failed_job.status == DocumentProcessingJobStatus.QUEUED.value
+        assert failed_job.attempts == 1
+        assert failed_job.available_at is not None
+        assert failed_job.available_at.replace(tzinfo=UTC) > datetime.now(UTC)
+    failed_document = get_document(session_factory, failed_document_id)
+    assert failed_document.processing_status == DocumentStatus.FAILED.value
+    assert failed_document.processing_error_code == "processing_failed"
+    assert get_segments(session_factory, failed_document_id) == []
+    assert len(extraction_attempts) == 1
+    assert extraction_attempts[0][0] == upload_root / failed_storage_key
+    assert not extraction_attempts[0][1].exists()
+    assert not extraction_attempts[0][1].parent.exists()
+    assert transcriber.requests == []
+    assert (upload_root / failed_storage_key).read_bytes() == original_video
+
+    assert process_next_document_job(session_factory, create_service)
+    with session_factory() as session:
+        successful_job = session.get(DocumentProcessingJob, successful_job_id)
+        assert successful_job is not None
+        assert successful_job.status == DocumentProcessingJobStatus.COMPLETED.value
+        assert successful_job.attempts == 1
+    successful_document = get_document(session_factory, successful_document_id)
+    assert successful_document.processing_status == DocumentStatus.COMPLETED.value
+    assert successful_document.processing_error_code is None
+    assert [
+        segment.text_content
+        for segment in get_segments(session_factory, successful_document_id)
+    ] == ["Following WAV transcript."]
+    assert len(transcriber.requests) == 1
+    assert transcriber.requests[0].file_type is DocumentFileType.WAV
+    assert transcriber.requests[0].audio_path == upload_root / successful_storage_key
+
+    for expected_attempt in range(
+        2,
+        document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS + 1,
+    ):
+        with session_factory() as session:
+            with session.begin():
+                failed_job = session.get(DocumentProcessingJob, failed_job_id)
+                assert failed_job is not None
+                failed_job.available_at = datetime.now(UTC)
+        assert process_next_document_job(session_factory, create_service)
+        assert len(extraction_attempts) == expected_attempt
+        assert not extraction_attempts[-1][1].exists()
+        assert not extraction_attempts[-1][1].parent.exists()
+        assert len(transcriber.requests) == 1
+        assert (
+            transcriber.requests[0].audio_path
+            == upload_root / successful_storage_key
+        )
+        assert (upload_root / failed_storage_key).read_bytes() == original_video
+
+    with session_factory() as session:
+        failed_job = session.get(DocumentProcessingJob, failed_job_id)
+        assert failed_job is not None
+        assert failed_job.status == DocumentProcessingJobStatus.FAILED.value
+        assert failed_job.attempts == (
+            document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS
+        )
+    failed_document = get_document(session_factory, failed_document_id)
+    assert failed_document.processing_status == DocumentStatus.FAILED.value
+    assert failed_document.processing_error_code == "processing_failed"
+    assert get_segments(session_factory, failed_document_id) == []
+    assert len(extraction_attempts) == (
+        document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS
+    )
+    assert len(indexing_services) == (
+        document_processing_job_repository.MAX_DOCUMENT_PROCESSING_ATTEMPTS + 1
+    )
+    assert all(
+        not embedding.calls and not vector_store.calls
+        for index, (_, embedding, vector_store) in enumerate(indexing_services)
+        if index != 1
+    )
+    assert len(indexing_services[1][1].calls) == 1
+    assert len(indexing_services[1][2].calls) == 1
+    assert all(
+        request.audio_path == upload_root / successful_storage_key
+        for request in transcriber.requests
+    )
+    assert (upload_root / failed_storage_key).read_bytes() == original_video
 
 
 def test_transient_audio_failure_succeeds_on_eligible_retry_once(
