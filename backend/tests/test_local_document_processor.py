@@ -365,6 +365,61 @@ def test_mp4_failures_clean_temporary_audio(
     assert (upload_root / storage_key).read_bytes() == b"original video"
 
 
+@pytest.mark.parametrize("failure_stage", ["extract", "transcribe"])
+def test_mp4_cleanup_failure_preserves_original_processing_failure(
+    upload_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    storage_key = write_upload(upload_root, "mp4", b"original video")
+    temporary_path = tmp_path / "cognify-mp4-test"
+    original_error = RuntimeError(f"controlled {failure_stage} failure")
+    cleanup_error = RuntimeError("controlled cleanup failure")
+
+    class FailingTemporaryDirectory:
+        def __init__(self, *, prefix: str) -> None:
+            assert prefix == "cognify-mp4-"
+
+        def __enter__(self) -> str:
+            temporary_path.mkdir()
+            return str(temporary_path)
+
+        def __exit__(self, *_args: object) -> None:
+            raise cleanup_error
+
+    class FakeAudioExtractor:
+        def extract(self, _input_video: Path, output_audio: Path) -> Path:
+            if failure_stage == "extract":
+                raise original_error
+            output_audio.write_bytes(b"extracted audio")
+            return output_audio
+
+    class FakeTranscriber:
+        def transcribe(
+            self,
+            _request: TranscriptionRequest,
+        ) -> TranscriptionResult:
+            raise original_error
+
+    monkeypatch.setattr(
+        "app.services.local_document_processor.TemporaryDirectory",
+        FailingTemporaryDirectory,
+    )
+
+    with pytest.raises(DocumentProcessingError) as raised:
+        LocalDocumentProcessor(
+            upload_root,
+            FakeTranscriber(),
+            audio_extractor=FakeAudioExtractor(),
+        ).process(make_input(storage_key, DocumentFileType.MP4))
+
+    assert raised.value.code is DocumentProcessingErrorCode.PROCESSING_FAILED
+    assert str(raised.value) == "Document processing failed."
+    assert raised.value.__cause__ is cleanup_error
+    assert cleanup_error.__context__ is original_error
+
+
 def test_mp4_without_extractor_fails_safely(upload_root: Path) -> None:
     storage_key = write_upload(upload_root, "mp4", b"original video")
 
