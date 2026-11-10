@@ -359,6 +359,34 @@ def test_unreadable_audio_fails_safely_before_model_loading(
     assert calls == []
 
 
+def test_empty_audio_input_fails_before_model_loading(
+    model_path: Path,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    inference_calls: list[str] = []
+
+    class TrackingWhisperModel:
+        def transcribe(self, audio: str) -> tuple[object, object]:
+            inference_calls.append(audio)
+            return [], object()
+
+    model_construction_calls = install_fake_runtime(
+        monkeypatch,
+        lambda *_args, **_kwargs: TrackingWhisperModel(),
+        audio_frames=[],
+    )
+
+    with pytest.raises(TranscriptionError) as raised:
+        FasterWhisperTranscriber(model_path).transcribe(
+            make_request(tmp_path / "empty.wav")
+        )
+
+    assert raised.value.code is TranscriptionErrorCode.INVALID_TRANSCRIPTION
+    assert model_construction_calls == []
+    assert inference_calls == []
+
+
 def test_empty_output_is_invalid_transcription(
     model_path: Path,
     tmp_path: Path,
