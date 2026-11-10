@@ -903,6 +903,75 @@ def test_worker_processes_supported_formats_sequentially_including_mp4(
     assert lock_connection.unlock_attempts == 1
 
 
+@pytest.mark.parametrize(
+    ("file_type", "filename", "content"),
+    [
+        pytest.param(
+            DocumentFileType.PDF,
+            "corrupt",
+            b"%PDF-1.4 malformed",
+            id="corrupt-pdf",
+        ),
+        pytest.param(
+            DocumentFileType.PDF,
+            "empty",
+            make_pdf_with_text(""),
+            id="pdf-without-extractable-text",
+        ),
+        pytest.param(
+            DocumentFileType.TXT,
+            "invalid-utf8",
+            b"\xff\xfe invalid UTF-8",
+            id="invalid-utf8-txt",
+        ),
+        pytest.param(
+            DocumentFileType.TXT,
+            "whitespace",
+            b" \r\n\t",
+            id="whitespace-only-txt",
+        ),
+    ],
+)
+def test_invalid_pdf_and_txt_jobs_fail_without_segments(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    file_type: DocumentFileType,
+    filename: str,
+    content: bytes,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    upload_root.mkdir()
+    document_id, job_id, _storage_key = create_uploaded_file_document(
+        session_factory,
+        upload_root,
+        file_type,
+        filename,
+        content,
+    )
+    service, embedding, vector_store = make_audio_indexing_service(
+        session_factory,
+        upload_root,
+        transcriber=None,
+    )
+
+    assert process_next_document_job(
+        session_factory,
+        lambda _document_id: service,
+    )
+
+    document = get_document(session_factory, document_id)
+    assert document.processing_status == DocumentStatus.FAILED.value
+    assert document.processing_error_code == "processing_failed"
+    assert get_segments(session_factory, document_id) == []
+    with session_factory() as session:
+        job = session.get(DocumentProcessingJob, job_id)
+        assert job is not None
+        assert job.status == DocumentProcessingJobStatus.QUEUED.value
+        assert job.attempts == 1
+    assert embedding.calls == []
+    assert vector_store.calls == []
+
+
 def test_audio_failure_retries_without_blocking_next_job_and_exhausts(
     session_factory: sessionmaker[Session],
     tmp_path: Path,
