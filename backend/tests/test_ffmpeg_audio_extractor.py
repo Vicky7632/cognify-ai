@@ -252,6 +252,7 @@ def test_invalid_input_is_rejected_without_invoking_ffmpeg(
 @pytest.mark.parametrize(
     "container_data",
     [
+        b"",
         b"not an MP4 container",
         struct.pack(">I4s", 4, b"ftyp"),
         struct.pack(">I4s", 100, b"ftyp") + b"isom",
