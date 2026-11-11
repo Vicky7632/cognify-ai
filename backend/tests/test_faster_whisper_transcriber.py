@@ -109,8 +109,11 @@ def install_fake_runtime(
     return calls
 
 
-def make_request(audio_path: Path) -> TranscriptionRequest:
-    return TranscriptionRequest(audio_path, DocumentFileType.WAV)
+def make_request(
+    audio_path: Path,
+    file_type: DocumentFileType = DocumentFileType.WAV,
+) -> TranscriptionRequest:
+    return TranscriptionRequest(audio_path, file_type)
 
 
 def test_missing_runtime_dependency_returns_safe_error(
@@ -336,10 +339,12 @@ def test_custom_audio_duration_limit_is_respected(
     assert calls == []
 
 
+@pytest.mark.parametrize("file_type", [DocumentFileType.MP3, DocumentFileType.WAV])
 def test_unreadable_audio_fails_safely_before_model_loading(
     model_path: Path,
     tmp_path: Path,
     monkeypatch,
+    file_type: DocumentFileType,
 ) -> None:
     calls = install_fake_runtime(
         monkeypatch,
@@ -351,7 +356,7 @@ def test_unreadable_audio_fails_safely_before_model_loading(
 
     with pytest.raises(TranscriptionError) as raised:
         FasterWhisperTranscriber(model_path).transcribe(
-            make_request(tmp_path / "corrupt.wav")
+            make_request(tmp_path / f"corrupt.{file_type.value}", file_type)
         )
 
     assert raised.value.code is TranscriptionErrorCode.INVALID_TRANSCRIPTION
@@ -359,10 +364,12 @@ def test_unreadable_audio_fails_safely_before_model_loading(
     assert calls == []
 
 
+@pytest.mark.parametrize("file_type", [DocumentFileType.MP3, DocumentFileType.WAV])
 def test_empty_audio_input_fails_before_model_loading(
     model_path: Path,
     tmp_path: Path,
     monkeypatch,
+    file_type: DocumentFileType,
 ) -> None:
     inference_calls: list[str] = []
 
@@ -379,7 +386,7 @@ def test_empty_audio_input_fails_before_model_loading(
 
     with pytest.raises(TranscriptionError) as raised:
         FasterWhisperTranscriber(model_path).transcribe(
-            make_request(tmp_path / "empty.wav")
+            make_request(tmp_path / f"empty.{file_type.value}", file_type)
         )
 
     assert raised.value.code is TranscriptionErrorCode.INVALID_TRANSCRIPTION
@@ -387,25 +394,29 @@ def test_empty_audio_input_fails_before_model_loading(
     assert inference_calls == []
 
 
+@pytest.mark.parametrize("file_type", [DocumentFileType.MP3, DocumentFileType.WAV])
 def test_empty_output_is_invalid_transcription(
     model_path: Path,
     tmp_path: Path,
     monkeypatch,
+    file_type: DocumentFileType,
 ) -> None:
     install_fake_runtime(monkeypatch, lambda *_args, **_kwargs: FakeWhisperModel([]))
 
     with pytest.raises(TranscriptionError) as raised:
         FasterWhisperTranscriber(model_path).transcribe(
-            make_request(tmp_path / "audio.wav")
+            make_request(tmp_path / f"audio.{file_type.value}", file_type)
         )
 
     assert raised.value.code is TranscriptionErrorCode.INVALID_TRANSCRIPTION
 
 
+@pytest.mark.parametrize("file_type", [DocumentFileType.MP3, DocumentFileType.WAV])
 def test_corrupt_audio_failure_is_safe(
     model_path: Path,
     tmp_path: Path,
     monkeypatch,
+    file_type: DocumentFileType,
 ) -> None:
     install_fake_runtime(
         monkeypatch,
@@ -417,7 +428,7 @@ def test_corrupt_audio_failure_is_safe(
 
     with pytest.raises(TranscriptionError) as raised:
         FasterWhisperTranscriber(model_path).transcribe(
-            make_request(tmp_path / "corrupt.wav")
+            make_request(tmp_path / f"corrupt.{file_type.value}", file_type)
         )
 
     assert raised.value.code is TranscriptionErrorCode.INVALID_TRANSCRIPTION
