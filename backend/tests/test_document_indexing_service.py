@@ -925,10 +925,22 @@ def test_worker_processes_supported_formats_sequentially_including_mp4(
             id="pdf-without-extractable-text",
         ),
         pytest.param(
+            DocumentFileType.PDF,
+            "empty-file",
+            b"",
+            id="empty-pdf-file",
+        ),
+        pytest.param(
             DocumentFileType.TXT,
             "invalid-utf8",
             b"\xff\xfe invalid UTF-8",
             id="invalid-utf8-txt",
+        ),
+        pytest.param(
+            DocumentFileType.TXT,
+            "empty-file",
+            b"",
+            id="empty-txt-file",
         ),
         pytest.param(
             DocumentFileType.TXT,
