@@ -12,7 +12,7 @@ from app.application import create_app
 from app.core.config import Settings
 from app.db.base import Base
 from app.db.session import get_db
-from app.models.document import Document, DocumentStatus
+from app.models.document import Document, DocumentFileType, DocumentStatus
 from app.models.document_processing_job import (
     DocumentProcessingJob,
     DocumentProcessingJobStatus,
@@ -319,10 +319,24 @@ def test_upload_rejects_unexpected_multipart_fields(client: TestClient) -> None:
     assert list(client.app.state.settings.upload_root.glob("*")) == []
 
 
-def test_upload_rejects_empty_file(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    "file_type",
+    list(DocumentFileType),
+    ids=lambda file_type: file_type.value,
+)
+def test_upload_rejects_empty_file(
+    client: TestClient,
+    file_type: DocumentFileType,
+) -> None:
     response = client.post(
         "/api/v1/documents/upload",
-        files={"file": ("empty.pdf", b"", "application/pdf")},
+        files={
+            "file": (
+                f"empty.{file_type.value}",
+                b"",
+                "application/octet-stream",
+            )
+        },
     )
 
     assert response.status_code == 422
