@@ -25,14 +25,19 @@ class ProcessedSegment:
         if not isinstance(self.text, str) or not self.text.strip():
             raise ValueError("Processed segment text must not be empty.")
         if self.page_number is not None and (
-            not isinstance(self.page_number, int) or self.page_number < 1
+            isinstance(self.page_number, bool)
+            or not isinstance(self.page_number, int)
+            or self.page_number < 1
         ):
             raise ValueError("Page number must be positive.")
         if (self.start_seconds is None) != (self.end_seconds is None):
             raise ValueError("Both media timestamps must be supplied together.")
         if self.start_seconds is not None:
-            if not isinstance(self.start_seconds, (int, float)) or not isinstance(
-                self.end_seconds, (int, float)
+            if (
+                isinstance(self.start_seconds, bool)
+                or not isinstance(self.start_seconds, (int, float))
+                or isinstance(self.end_seconds, bool)
+                or not isinstance(self.end_seconds, (int, float))
             ):
                 raise ValueError("Media timestamps must be numeric.")
             if (

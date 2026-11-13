@@ -105,6 +105,56 @@ def test_processing_result_contains_valid_text_and_provenance() -> None:
     assert result.segments[1].start_seconds == 1.5
 
 
+@pytest.mark.parametrize(
+    ("page_number", "start_seconds", "end_seconds"),
+    [
+        pytest.param(True, None, None, id="page-number-true"),
+        pytest.param(False, None, None, id="page-number-false"),
+        pytest.param(None, True, 1, id="start-seconds-true"),
+        pytest.param(None, False, 1, id="start-seconds-false"),
+        pytest.param(None, 0, True, id="end-seconds-true"),
+        pytest.param(None, 0, False, id="end-seconds-false"),
+    ],
+)
+def test_processed_segment_rejects_boolean_provenance(
+    page_number: int | None,
+    start_seconds: float | None,
+    end_seconds: float | None,
+) -> None:
+    with pytest.raises(ValueError):
+        ProcessedSegment(
+            "Valid segment text",
+            page_number=page_number,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+        )
+
+
+@pytest.mark.parametrize(
+    ("page_number", "start_seconds", "end_seconds"),
+    [
+        pytest.param(2, None, None, id="integer-page-number"),
+        pytest.param(None, 0, 1, id="integer-timestamps"),
+        pytest.param(None, 0.25, 1.5, id="floating-point-timestamps"),
+    ],
+)
+def test_processed_segment_accepts_valid_numeric_provenance(
+    page_number: int | None,
+    start_seconds: float | None,
+    end_seconds: float | None,
+) -> None:
+    segment = ProcessedSegment(
+        "Valid segment text",
+        page_number=page_number,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+    )
+
+    assert segment.page_number == page_number
+    assert segment.start_seconds == start_seconds
+    assert segment.end_seconds == end_seconds
+
+
 def test_processing_result_rejects_empty_segments() -> None:
     with pytest.raises(ValueError, match="at least one segment"):
         ProcessingResult(segments=())
